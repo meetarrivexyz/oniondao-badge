@@ -81,6 +81,37 @@ to a text-only ASCII-bar mode so the game logic still runs.
 `millis`). All additions are in `main/main.cpp` and documented in
 `docs/03-api-improvement.md`.
 
+## OnionWars
+
+`onionwars.lua` is a badge-native, onion-themed take on the classic trading game
+(**OnionWars**), with **onions** as the currency instead of dollars. Buy low and
+sell high across six Chicago neighborhoods over 2 days, manage a produce cart's
+worth of inventory, pay down the Dealer's loan (with daily interest) at the Loop
+bank, dodge **FDA raids** (Sec. Kennedy's new food bill) with your standing and
+a lawyer on retainer, weather Chicago/Illinois policy taxes, and ride random
+market shocks. Score is your final net worth, and a personal best is kept in
+NVS. The whole game runs as a single Lua script and saves progress to NVS, so
+you can resume an unfinished run.
+
+The in-game cash/debt balances are a local ledger — no real Onion tokens move
+for them. In a **staked match** it costs `100` real onions to play; every entry
+goes to the Dealer escrow wallet, and at settlement the pot is split `80%` to
+the highest net worth in OnionDAO and `20%` as the City of Chicago Digital
+Asset Tax, paid to the OnionDAO handle `@chicagotax`. That real token movement
+is settled server-side and is specified in [`../ONIONWARS.md`](../ONIONWARS.md);
+the `report_score` hook in the script is where the badge plugs into the match.
+
+Controls:
+
+- `UP` / `DOWN`: move cursor / change quantity by 1
+- `LEFT` / `RIGHT`: change quantity by 10
+- `SELECT`: confirm the highlighted action
+- `CANCEL`: back out one screen; on the main menu, save and return to Onion OS
+
+**Requires:** Path B firmware (`display_begin`, `display_commit`, `kv_set`,
+`kv_get`, `kv_delete`, `millis`, `buttons`). `secure_random` and `http_post`
+are used when present but are not required for single-player.
+
 ## Name Tag
 
 `nametag.lua` is a self-contained name badge: the PBM image is embedded in the
