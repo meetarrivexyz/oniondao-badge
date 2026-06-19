@@ -81,6 +81,18 @@ to a text-only ASCII-bar mode so the game logic still runs.
 `millis`). All additions are in `main/main.cpp` and documented in
 `docs/03-api-improvement.md`.
 
+## Name Tag
+
+`nametag.lua` is a self-contained name badge: the PBM image is embedded in the
+script as base64, decoded at runtime, staged into SPIFFS as `badge.pbm`, and
+drawn full-screen with `onion.display_bitmap`. No separate image asset is
+required, so it installs through the script manifest with no `images` entry.
+
+Controls:
+
+- `SELECT`: redraw the badge
+- `CANCEL`: return to Onion OS
+
 ## Image Browser
 
 `image-browser.lua` browses every downloaded image stored in SPIFFS as
@@ -113,6 +125,10 @@ To install it through a manifest, serve this script and the image assets:
     {
       "name": "image-browser.lua",
       "url": "https://example.com/image-browser.lua"
+    },
+    {
+      "name": "nametag.lua",
+      "url": "https://example.com/nametag.lua"
     }
   ],
   "images": [

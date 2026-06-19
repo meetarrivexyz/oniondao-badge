@@ -1257,6 +1257,13 @@ static void redraw() {
 static void restoreWifiProtocol() {
     esp_wifi_set_protocol(WIFI_IF_STA,
         WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+    // Disable WiFi modem power-save. Arduino defaults the STA to WIFI_PS_MIN_MODEM,
+    // which sleeps the radio between DTIM beacons; on a busy AP (e.g. CIC Guest)
+    // that makes the station miss traffic and look "offline" — the broker and
+    // Onion server then drop the badge. WIFI_PS_NONE keeps the radio awake so the
+    // MQTT keepalive and the 30 s presence handshake stay live. Asserted here
+    // because every AP-association path calls restoreWifiProtocol() first.
+    esp_wifi_set_ps(WIFI_PS_NONE);
 }
 
 static bool ensureWifi() {
@@ -4994,7 +5001,23 @@ static int luaOnionButtons(lua_State* L) {
 static int luaOnionSleep(lua_State* L) {
     uint32_t ms = (uint32_t)luaL_optinteger(L, 1, 0);
     if (ms > LUA_SLEEP_MAX_MS) ms = LUA_SLEEP_MAX_MS;
-    delay(ms);
+    // Lua scripts run synchronously inside loop() via lua_pcall, so a script that
+    // sits in `while true ... onion.sleep() end` (nametag, image-browser, etc.)
+    // blocks loop() and stops the periodic MQTT handshake — the server then marks
+    // the badge offline. Service connectivity in chunks while we wait so a
+    // well-behaved foreground script stays online without changing the script.
+    uint32_t start = millis();
+    for (;;) {
+        ensureMqtt();
+        if (g_mqttConnected && millis() - g_lastHandshake > HANDSHAKE_INTERVAL_MS) {
+            g_lastHandshake = millis();
+            doMqttHandshake();
+        }
+        uint32_t elapsed = millis() - start;
+        if (elapsed >= ms) break;
+        uint32_t remaining = ms - elapsed;
+        delay(remaining < 100 ? remaining : 100);
+    }
     return 0;
 }
 
