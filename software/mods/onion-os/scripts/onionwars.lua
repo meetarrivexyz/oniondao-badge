@@ -219,8 +219,10 @@ local function commas(n)
   return sign .. out
 end
 
--- onions are written with a leading "O" so the e-paper font renders cleanly
-local function onions(n) return "O" .. commas(n) end
+-- Onion amounts show as a plain comma-grouped number (e.g. 1,405). Every value
+-- on screen is labelled (Cash, Owe, Price, Cost...) and the whole game is in
+-- onions, so no currency prefix is needed -- and a leading "O" read like a zero.
+local function onions(n) return commas(n) end
 
 -- Layout constants for the 264x176 e-paper panel using FreeMono9pt fonts.
 -- The 9pt mono font advances ~18px per line and ~11px per char, so lines must
