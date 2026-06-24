@@ -25,15 +25,32 @@
 -- Constants
 -------------------------------------------------------------------------------
 
-local TOTAL_DAYS   = 15
+local TOTAL_DAYS   = 30   -- one month: 30 days / 30 moves
 local START_CASH   = 2000
 local START_DEBT   = 5500
 local START_HP     = 30
 local START_COAT   = 100
-local DEBT_RATE    = 0.30   -- Chicago loan-shark "juice": 30%/day, compounds daily
+local DEBT_RATE    = 0.10   -- Chicago loan-shark "juice": 10%/day, compounds daily
 local BANK_RATE     = 0.05  -- savings interest per day
+local GOAL_NET      = 1000000  -- the "retire" target: become the Onion Kingpin
 local SCREEN_W      = 264
 local SCREEN_H      = 176
+
+-- Difficulty / fairness knobs. Higher = more punishing. Defaults are tuned so a
+-- careful player can recover from a bad break instead of wanting to throw the
+-- badge: at most ONE bad event per travel, a grace window at the start, gentler
+-- raid odds, and smaller, rarer shakedowns.
+local GRACE_DAYS    = 3    -- first N days have no raids or shakedowns
+local RAID_BASE     = 6    -- base Pritzker-raid % while carrying onions
+local RAID_PER_UNIT = 20   -- +1% raid risk per this many crates carried
+local RAID_CAP      = 25   -- max raid %
+local POLICY_CHANCE = 10   -- % chance of a policy/tax skim on a travel
+local POLICY_MIN    = 6    -- a policy skim takes POLICY_MIN..POLICY_MAX % of cash
+local POLICY_MAX    = 15
+local SHAKE_CHANCE  = 7    -- % chance EACH of the Jiaming / Tippi shakedowns
+local SHAKEDOWN_PCT = 12   -- % taken by a shakedown
+local PD_GAMEOVER   = 8    -- public defender: % chance you're held for good
+local RUN_ESCAPE    = 80   -- ditch-and-run: % chance of a clean getaway
 
 -- Master switch for real-onion staking. While false, the game is pure free
 -- play: no entry fee, no Onion Loan charge, no score reporting -- nothing ever
@@ -61,7 +78,7 @@ local LEADERBOARD_TOP   = 10  -- how many players to fetch/show
 
 -- Onion Loan: spend real onions to take out a bigger in-game loan (more buying
 -- power). Each real onion buys LOAN_RATE in-game onions of cash, added to your
--- in-game debt (same 30%/day loan-shark mechanics). The real onions split like the pot:
+-- in-game debt (same 20%/day loan-shark mechanics). The real onions split like the pot:
 -- TAX_PCT goes to @chicagotax, the rest goes to the holding (escrow) wallet.
 -- In free play (no staked match) the loan is simulated -- no real onions move.
 local LOAN_RATE       = 100  -- in-game cash granted per real onion spent
@@ -122,6 +139,8 @@ local function fresh_state()
     inv      = inv,               -- units held per drug index
     market   = {},                -- price per drug index for current city (0 = unavailable)
     over     = false,
+    peak     = 0,                 -- best net worth seen this run (runtime only)
+    tip      = nil,               -- pending hot-tip { good, city } (runtime only)
   }
 end
 
@@ -148,6 +167,25 @@ end
 
 local function net_worth()
   return S.cash + S.bank + stash_value() - S.debt
+end
+
+-- Rank ladder by net worth -- a title to chase and show off. Thresholds rise
+-- toward GOAL_NET (Onion Kingpin).
+local TITLES = {
+  { -1,      "Broke" },           -- in the red (debt > assets)
+  { 0,       "Onion Peddler" },
+  { 25000,   "Onion Hustler" },
+  { 100000,  "Onion Dealer" },
+  { 300000,  "Onion Boss" },
+  { 600000,  "Onion Baron" },
+  { GOAL_NET, "Onion Kingpin" },
+}
+local function rank_title(nw)
+  local t = TITLES[1][2]
+  for _, row in ipairs(TITLES) do
+    if nw >= row[1] then t = row[2] end
+  end
+  return t
 end
 
 -------------------------------------------------------------------------------
@@ -355,6 +393,18 @@ local function generate_market()
     local m = down[rnd(1, #down)]
     events[#events + 1] = m[1]; events[#events + 1] = m[2]
   end
+
+  -- Hot tip pays off: if a tip pointed you to this city, the named good is hot
+  -- here today. This makes a tip actionable -- travel here to cash in (or buy
+  -- elsewhere and sell it here). Consumes the tip.
+  if S.tip and S.tip.city == S.city then
+    local i = S.tip.good
+    S.market[i] = math.floor(DRUGS[i].high * (1.4 + math.random()) * mult)
+    events[#events + 1] = "Your tip paid off!"
+    events[#events + 1] = DRUGS[i].name .. " is hot here!"
+    S.tip = nil
+  end
+
   return events
 end
 
@@ -395,7 +445,7 @@ local function raid_encounter()
   local cursor, chosen = 1, nil
   local prev = onion.buttons()
   while not chosen do
-    local lines = { "JB PRITZKER LAW!", "Caught buying onions:" }
+    local lines = { "JB PRITZKER LAW!", "Caught buying on .onion" }
     for i, o in ipairs(opts) do
       lines[#lines + 1] = ((i == cursor) and "> " or "  ") .. o.label
     end
@@ -421,35 +471,36 @@ local function raid_encounter()
     jail(2)
     notify({ "Cheap lawyer settles.", "Paid " .. onions(pay) .. ".", "2 days in County jail." })
   elseif chosen == "public" then
-    if chance(20) then
+    if chance(PD_GAMEOVER) then
       S.hp = 0 -- held indefinitely -> game over
       notify({ "Public defender folds.", "You're held", "indefinitely. Over." })
     else
-      local d = rnd(4, 6); jail(d)
+      local d = rnd(2, 4); jail(d)
       notify({ "Public defender stalls.", d .. " days in County jail.", "Kept your onions." })
     end
   else -- run
-    drop_onions()
-    if chance(70) then
-      notify({ "You ditched the cart", "and ran! Lost onions,", "kept your cash." })
+    if chance(RUN_ESCAPE) then
+      notify({ "You ditched the cart", "and ran! Got away", "with your onions." })
     else
-      jail(3)
-      notify({ "Caught running!", "Onions seized,", "3 days in jail." })
+      drop_onions()
+      jail(2)
+      notify({ "Caught running!", "Onions seized,", "2 days in jail." })
     end
   end
 end
 
--- A 20% shakedown. "Math of the game decides" whether they take 20% of your
--- cash on hand or 20% of all your onions (cash + bank). Deducts and returns the
--- amount lost plus a label ("cash" or "onions").
+-- A shakedown for SHAKEDOWN_PCT of your money. A coin flip decides whether they
+-- take that % of your cash on hand or that % of all your onions (cash + bank).
+-- Deducts and returns the amount lost plus a label ("cash" or "onions").
 local function shakedown_20()
+  local frac = SHAKEDOWN_PCT / 100
   if rnd(1, 2) == 1 then
-    local loss = math.floor(S.cash * 0.20)
+    local loss = math.floor(S.cash * frac)
     S.cash = S.cash - loss
     return loss, "cash"
   else
     local total = S.cash + S.bank
-    local loss = math.floor(total * 0.20)
+    local loss = math.floor(total * frac)
     local from_cash = math.min(loss, S.cash)
     S.cash = S.cash - from_cash
     S.bank = S.bank - (loss - from_cash)
@@ -458,12 +509,20 @@ local function shakedown_20()
 end
 
 local function travel_events()
+  -- Grace window: the first GRACE_DAYS are free of raids and shakedowns so you
+  -- can build a stake before the city comes after you. Good events still happen.
+  local penalties_on = S.day > GRACE_DAYS
+
   -- Pritzker-raid chance scales with how much contraband you are carrying.
-  local risk = 10 + math.floor(carried() / 10)
-  if risk > 45 then risk = 45 end
-  if carried() > 0 and chance(risk) then
-    raid_encounter()
-    if S.hp <= 0 then return end
+  -- A raid is the ONE bad event for this trip -- it returns afterward so you are
+  -- never raided AND skimmed on the same travel.
+  if penalties_on and carried() > 0 then
+    local risk = RAID_BASE + math.floor(carried() / RAID_PER_UNIT)
+    if risk > RAID_CAP then risk = RAID_CAP end
+    if chance(risk) then
+      raid_encounter()
+      return
+    end
   end
 
   -- Free produce find.
@@ -480,9 +539,69 @@ local function travel_events()
     return
   end
 
+  -- Big buyer: a wholesaler wants a good you're already holding, at a premium.
+  -- Rewards holding/speculation and turns a full cart into a payday.
+  if chance(9) then
+    local held = {}
+    for i = 1, #DRUGS do if S.inv[i] > 0 then held[#held + 1] = i end end
+    if #held > 0 then
+      local i = held[rnd(1, #held)]
+      local mult = CITY_MULT[S.city] or 1.0
+      local price = math.max(DRUGS[i].high, math.floor(DRUGS[i].high * (1.6 + math.random()) * mult))
+      local qty = S.inv[i]
+      local total = price * qty
+      local prev = onion.buttons()
+      screen({
+        "BIG BUYER!",
+        "Wants all your " .. DRUGS[i].name,
+        qty .. " @ " .. onions(price),
+        "Total " .. onions(total),
+        "SELECT sell  CANCEL keep",
+      }, { font = "bold" })
+      local btn
+      repeat btn = wait_button(prev) until btn == "select" or btn == "cancel"
+      if btn == "select" then
+        S.cash = S.cash + total
+        S.inv[i] = 0
+        notify({ "Sold the lot!", "+" .. onions(total), "Cash " .. onions(S.cash) })
+      end
+      return
+    end
+  end
+
+  -- Small windfall: a little cash luck to keep momentum up.
+  if chance(8) then
+    local gain = rnd(80, 400)
+    S.cash = S.cash + gain
+    local wins = {
+      { "Found a roll of cash!", "+" .. onions(gain) },
+      { "Vendor tips you for", "a hot lead. +" .. onions(gain) },
+      { "Tax refund hits!", "+" .. onions(gain) },
+      { "Won a bar bet.", "+" .. onions(gain) },
+    }
+    notify(wins[rnd(1, #wins)])
+    return
+  end
+
+  -- Hot tip: a rumor that a good will be hot in some neighborhood. Sets a tip
+  -- that generate_market() cashes in when you arrive there -- real, actionable
+  -- intel, so the player has a plan instead of just reacting.
+  if not S.tip and chance(11) then
+    local i = rnd(1, #DRUGS)
+    local c = rnd(1, #CITIES)
+    S.tip = { good = i, city = c }
+    notify({
+      "Word on the street:",
+      DRUGS[i].name .. " is about to",
+      "pop in " .. CITIES[c] .. ".",
+      "Get there to cash in.",
+    })
+    return
+  end
+
   -- Policy / law event: Springfield & City Hall skim a % of your wallet.
-  if S.cash > 200 and chance(16) then
-    local pct = rnd(10, 30)
+  if penalties_on and S.cash > 200 and chance(POLICY_CHANCE) then
+    local pct = rnd(POLICY_MIN, POLICY_MAX)
     local loss = math.floor(S.cash * (pct / 100))
     S.cash = S.cash - loss
     local hit = "-" .. onions(loss) .. " (" .. pct .. "%)"
@@ -498,25 +617,25 @@ local function travel_events()
   end
 
   -- Jiaming films your onion buy on her iPhone -- pay to delete the footage.
-  if S.cash > 100 and chance(12) then
+  if penalties_on and S.cash > 100 and chance(SHAKE_CHANCE) then
     local loss, basis = shakedown_20()
     notify({
       "Jiaming filmed your",
       "onion buy on iPhone!",
       "Pay to delete it.",
-      "Lost 20% of " .. basis .. ":",
+      "Lost " .. SHAKEDOWN_PCT .. "% of " .. basis .. ":",
       "-" .. onions(loss),
     })
     return
   end
 
   -- Police chase -- you escape in a Tippi5star Uber, for a price.
-  if S.cash > 100 and chance(12) then
+  if penalties_on and S.cash > 100 and chance(SHAKE_CHANCE) then
     local loss, basis = shakedown_20()
     notify({
       "Cops on you! You jumped",
       "in a Tippi5star Uber.",
-      "Payoff: 20% of " .. basis,
+      "Payoff: " .. SHAKEDOWN_PCT .. "% of " .. basis,
       "-" .. onions(loss),
     })
     return
@@ -880,6 +999,9 @@ local function main_menu()
   local cursor = 1
   local prev = onion.buttons()
   while not S.over do
+    -- Track the best net worth reached this run, for the end-of-month summary.
+    local nw_now = net_worth()
+    if nw_now > (S.peak or 0) then S.peak = nw_now end
     local in_loop = CITIES[S.city] == BANK_CITY
     local actions = { "Buy", "Sell", "Travel" }
     if in_loop then actions[#actions + 1] = "Bank" end
@@ -911,11 +1033,18 @@ local function main_menu()
       elseif a == "Sell" then do_sell()
       elseif a == "Bank" then do_bank()
       elseif a == "Stash" then
-        local rows = { "NET WORTH: " .. onions(net_worth()), "" }
+        local nw = net_worth()
+        local pct = math.floor(nw / GOAL_NET * 100)
+        if pct < 0 then pct = 0 end
+        local rows = {
+          "NET WORTH: " .. onions(nw),
+          rank_title(nw) .. "  (" .. pct .. "% to goal)",
+          "",
+        }
         for i, d in ipairs(DRUGS) do
           if S.inv[i] > 0 then rows[#rows + 1] = d.name .. " x" .. S.inv[i] end
         end
-        if #rows == 2 then rows[#rows + 1] = "(cart is empty)" end
+        if #rows == 3 then rows[#rows + 1] = "(cart is empty)" end
         notify(rows)
       elseif a == "Travel" then
         local ended = do_travel()
