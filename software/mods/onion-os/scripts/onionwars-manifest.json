@@ -2,7 +2,7 @@
   "scripts": [
     {
       "name": "onionwars.lua",
-      "url": "https://raw.githubusercontent.com/meetarrivexyz/oniondao-badge/fix/badge-wifi-sleep/software/mods/onion-os/scripts/onionwars.lua",
+      "url": "https://cdn.jsdelivr.net/gh/meetarrivexyz/oniondao-badge@fix/badge-wifi-sleep/software/mods/onion-os/scripts/onionwars.lua",
       "autorun": false
     }
   ]
