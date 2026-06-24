@@ -25,7 +25,7 @@
 -- Constants
 -------------------------------------------------------------------------------
 
-local TOTAL_DAYS   = 2
+local TOTAL_DAYS   = 10
 local START_CASH   = 2000
 local START_DEBT   = 5500
 local START_HP     = 20
