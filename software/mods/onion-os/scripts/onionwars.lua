@@ -627,17 +627,32 @@ local function do_buy()
   local cursor = 1
   local prev = onion.buttons()
   while true do
+    -- Cart full: nothing is buyable, so don't show a list of things you can't take.
+    if space_left() <= 0 then
+      notify({ "Your cart is full.", "Sell some, or grab a", "bigger cart." })
+      return
+    end
+    -- Only list goods on sale that you can afford at least one of. Anything you
+    -- can't buy (too expensive) is hidden rather than shown as a dead option.
     local rows = {}
     local available = {}
+    local on_sale = 0
     for i, d in ipairs(DRUGS) do
       local p = S.market[i] or 0
       if p > 0 then
-        available[#available + 1] = i
-        rows[#rows + 1] = d.name .. " " .. onions(p)
+        on_sale = on_sale + 1
+        if p <= S.cash then
+          available[#available + 1] = i
+          rows[#rows + 1] = d.name .. " " .. onions(p)
+        end
       end
     end
+    if on_sale == 0 then
+      notify({ "Nothing for sale today.", "Try another area." })
+      return
+    end
     if #available == 0 then
-      notify({ "Nothing for sale today.", "Try another borough." })
+      notify({ "Can't afford anything", "on sale here today.", "Sell, or find cheaper." })
       return
     end
     if cursor > #available then cursor = #available end
