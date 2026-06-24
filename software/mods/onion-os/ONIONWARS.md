@@ -32,12 +32,19 @@ The loop is the classic one, with onions as the currency:
   Settled server-side (see Phase 2); simulated in free play.
 - **Produce cart** capacity limits how much you can carry; a supplier sometimes
   offers a `+40`-crate upgrade.
-- **JB Pritzker Law raids, standing, and lawyers.** The enforcer is the
-  Governor's digital-asset crackdown — state agents come to seize your onions.
-  Carrying more contraband produce raises the raid chance. You start with `20`
-  standing; defend with a lawyer on retainer (bought from a lobbyist) or ditch
-  the cart and run. Lose all your standing and the state shuts you down (game
-  over).
+- **JB Pritzker Law raids — a money-vs-time choice.** The Governor's
+  digital-asset crackdown catches you mid onion buy (chance scales with how much
+  you're carrying). You pick a defense:
+  - **Super lawyer (dev):** high fee, 0 days lost, keep your onions, always wins.
+  - **Bob (mid lawyer):** mid fee, 2 days in County jail, keep your onions.
+  - **Public defender:** free, 4–6 days in jail, keep your onions — but a small
+    chance you're *held indefinitely* (game over).
+  - **Ditch cart & run:** free and no days lost, but you drop **all** your onions
+    (keep your cash); sometimes you're caught anyway.
+  - A **lawyer on retainer** (bought from a lobbyist) is a free instant win.
+  Jail days hurt because debt keeps compounding while you're locked up, and the
+  days come out of your 15. So it's keep-onions-but-pay-money-and-time vs
+  keep-cash-but-lose-the-onions.
 - **Policy/law events.** Travel can trigger a Chicago/Illinois policy hit that
   skims 10–30% of your wallet (cash) — e.g. "Gov. JB Pritzker signs a new
   digital-asset law", a Chicago Digital Asset Tax hike, a Cook County contraband
@@ -165,6 +172,27 @@ MQTT topic). So Phase 2 is mostly server + firmware work, with thin Lua hooks.
 | `POST /api/games/onionwars/join`  | `match, onionId, wallet` | build + push stake-in transfer; record join on confirm |
 | `POST /api/games/onionwars/score` | `match, onionId, wallet, score, day` | record reported score (validated) |
 | `GET  /api/games/onionwars/match/{code}` | – | players, pot size, deadline, status, winner |
+| `POST /api/games/onionwars/leaderboard` | `onionId, wallet, score, day` | upsert player's **best** global score (no tokens move) |
+| `GET  /api/games/onionwars/leaderboard?limit=N` | – | top N players, highest first (see shape below) |
+
+### Global leaderboard (free play too)
+
+Separate from staked matches, every finished run posts its final net worth to a
+**global high-score board** — bragging rights only, no onions move — and the
+in-game **"Scores"** menu item fetches and pages through the current top players.
+This works in free play and in staked matches.
+
+`GET /api/games/onionwars/leaderboard?limit=N` must return JSON shaped like:
+
+```json
+{ "players": [ { "name": "alice", "score": 124500, "day": 15 }, ... ] }
+```
+
+- `name` is the display label the server resolves from `onionId`/`wallet` (a
+  handle, or a short wallet like `7xKp..f3`). The badge truncates it to 9 chars.
+- The list must already be sorted highest-first; the badge renders rank by order.
+- The badge parses this with plain Lua patterns (no JSON lib on-device), reading
+  `"name"` and `"score"` within each `{...}` object, so any extra fields are fine.
 
 The stake-in and payout transfers reuse the **existing** badge transaction
 flow; no new firmware signing path is required. The only firmware/Lua-side
@@ -186,6 +214,12 @@ when a match code is present in NVS:
   badge credits the in-game loan **only** if this returns true, so a failed or
   declined payment never grants buying power. The actual onion transfer (and
   the 20%/rest split) is built and submitted by the server.
+- `submit_global_score(final)` — at game over, best-effort POST of the final net
+  worth to `/api/games/onionwars/leaderboard`. Silent and fire-and-forget; skips
+  if the badge has no `onion.onion_id`. Runs in free play too.
+- `fetch_leaderboard()` / `show_leaderboard()` — the "Scores" menu item GETs the
+  global top-N and pages through it (UP/DOWN), falling back to the local personal
+  best (`ow_best`) when the board is unreachable.
 
 This keeps the on-chain authority server-side while leaving the badge game
 ready to plug into a staked match the moment the server routes exist.

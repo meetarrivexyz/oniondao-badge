@@ -30,7 +30,7 @@ local START_CASH   = 2000
 local START_DEBT   = 5500
 local START_HP     = 30
 local START_COAT   = 100
-local DEBT_RATE    = 0.10   -- loan shark interest per day
+local DEBT_RATE    = 0.30   -- Chicago loan-shark "juice": 30%/day, compounds daily
 local BANK_RATE     = 0.05  -- savings interest per day
 local SCREEN_W      = 264
 local SCREEN_H      = 176
@@ -51,9 +51,17 @@ local WINNER_PCT = 80
 local TAX_PCT    = 20
 local TAX_HANDLE = "@chicagotax"
 
+-- Global leaderboard. Every finished run posts its final net worth to a global
+-- high-score board (no real onions move -- this is just bragging rights), and
+-- the "Scores" menu item fetches the current top players. Works in free play
+-- AND staked matches; needs a player identity (onion.onion_id) to submit, but
+-- anyone can view. See ONIONWARS.md for the server contract.
+local LEADERBOARD_URL   = "https://oniondao.dev/api/games/onionwars/leaderboard"
+local LEADERBOARD_TOP   = 10  -- how many players to fetch/show
+
 -- Onion Loan: spend real onions to take out a bigger in-game loan (more buying
 -- power). Each real onion buys LOAN_RATE in-game onions of cash, added to your
--- in-game debt (same 10%/day mechanics). The real onions split like the pot:
+-- in-game debt (same 30%/day loan-shark mechanics). The real onions split like the pot:
 -- TAX_PCT goes to @chicagotax, the rest goes to the holding (escrow) wallet.
 -- In free play (no staked match) the loan is simulated -- no real onions move.
 local LOAN_RATE       = 100  -- in-game cash granted per real onion spent
@@ -354,52 +362,80 @@ end
 -- Random travel events
 -------------------------------------------------------------------------------
 
--- A JB Pritzker Law raid (the Governor's new digital-asset crackdown). You
--- defend with lawyers on retainer (internally still S.gun) or run; raids cost
--- standing (S.hp). Returns once resolved (may end the game if standing hits 0).
-local function raid_encounter()
-  local agents = rnd(1, 3)
-  while agents > 0 and S.hp > 0 do
-    local prev = onion.buttons()
-    screen({
-      "JB PRITZKER LAW!",
-      agents .. " state agents want",
-      "to seize your onions.",
-      "Standing " .. S.hp .. "  Lwyr " .. S.gun,
-      "",
-      S.gun > 0 and "SELECT Lawyer up" or "(no lawyer)",
-      "CANCEL Ditch & run",
-    }, { font = "bold" })
-    local btn = wait_button(prev)
-
-    if btn == "select" and S.gun > 0 then
-      if chance(70) then
-        agents = agents - 1
-        notify({ "Your lawyer got one", "charge thrown out!", "Agents left: " .. agents })
-      else
-        local dmg = rnd(1, 3)
-        S.hp = S.hp - dmg
-        notify({ "They slapped you with", "fines & bad press.", "-" .. dmg .. " standing (now " .. S.hp .. ")" })
-      end
-    elseif btn == "cancel" then -- run
-      if chance(72) then
-        notify({ "You ditched the cart", "and slipped them. Phew." })
-        return
-      else
-        local dmg = rnd(1, 2)
-        S.hp = S.hp - dmg
-        notify({ "Cited on the way out.", "-" .. dmg .. " standing." })
-      end
-    end
-    -- any other button just redraws the raid prompt
-
-    if S.hp <= 0 then return end
+-- Spend `days` locked up: time passes (debt keeps compounding at the loan-shark
+-- rate) while you can't trade. If this runs past the deadline, do_travel ends
+-- the game on its day check.
+local function jail(days)
+  for _ = 1, days do
+    S.day = S.day + 1
+    S.debt = math.floor(S.debt * (1 + DEBT_RATE))
+    S.bank = math.floor(S.bank * (1 + BANK_RATE))
   end
-  if agents <= 0 and S.hp > 0 then
-    local loot = rnd(200, 1500)
-    S.cash = S.cash + loot
-    notify({ "Case dismissed!",
-      "Countersued, won " .. onions(loot) })
+end
+
+-- A JB Pritzker Law raid (the Governor's digital-asset crackdown). You're caught
+-- mid onion buy and choose a defense -- a tradeoff of MONEY vs DAYS:
+--   Super lawyer (dev): high $, 0 days, keep onions, always wins.
+--   Bob (mid lawyer):   mid $, 2 days in jail, keep onions.
+--   Public defender:    free, 4-6 days in jail, keep onions; small chance you
+--                       are held indefinitely (game over).
+--   Ditch cart & run:   free + 0 days, but you drop ALL your onions (keep cash);
+--                       sometimes you're caught anyway.
+-- A lawyer on retainer (S.gun, bought from a lobbyist) is a free instant win.
+local function raid_encounter()
+  local super_cost = math.max(500, math.floor(S.cash * 0.40))
+  local bob_cost   = math.max(200, math.floor(S.cash * 0.20))
+  local opts = {}
+  if S.gun > 0 then opts[#opts + 1] = { k = "retainer", label = "Use retainer (free)" } end
+  opts[#opts + 1] = { k = "super",  label = "Super lawyer " .. onions(super_cost) }
+  opts[#opts + 1] = { k = "bob",    label = "Bob (mid) " .. onions(bob_cost) }
+  opts[#opts + 1] = { k = "public", label = "Public defender" }
+  opts[#opts + 1] = { k = "run",    label = "Ditch cart & run" }
+
+  local cursor, chosen = 1, nil
+  local prev = onion.buttons()
+  while not chosen do
+    local lines = { "JB PRITZKER LAW!", "Caught buying onions:" }
+    for i, o in ipairs(opts) do
+      lines[#lines + 1] = ((i == cursor) and "> " or "  ") .. o.label
+    end
+    screen(lines, { font = "bold" })
+    local btn = wait_button(prev)
+    if btn == "up" then cursor = cursor - 1; if cursor < 1 then cursor = #opts end
+    elseif btn == "down" then cursor = cursor + 1; if cursor > #opts then cursor = 1 end
+    elseif btn == "cancel" then chosen = "run"
+    elseif btn == "select" then chosen = opts[cursor].k
+    end
+  end
+
+  local function drop_onions() for i = 1, #DRUGS do S.inv[i] = 0 end end
+
+  if chosen == "retainer" then
+    S.gun = S.gun - 1
+    notify({ "Your retained lawyer", "got it dropped. Kept", "your onions, no jail." })
+  elseif chosen == "super" then
+    local pay = math.min(super_cost, S.cash); S.cash = S.cash - pay
+    notify({ "Super lawyer wins!", "Charges dropped.", "Paid " .. onions(pay) .. ", 0 days." })
+  elseif chosen == "bob" then
+    local pay = math.min(bob_cost, S.cash); S.cash = S.cash - pay
+    jail(2)
+    notify({ "Bob settled it.", "Paid " .. onions(pay) .. ".", "2 days in County jail." })
+  elseif chosen == "public" then
+    if chance(20) then
+      S.hp = 0 -- held indefinitely -> game over
+      notify({ "Public defender folds.", "You're held", "indefinitely. Over." })
+    else
+      local d = rnd(4, 6); jail(d)
+      notify({ "Public defender stalls.", d .. " days in County jail.", "Kept your onions." })
+    end
+  else -- run
+    drop_onions()
+    if chance(70) then
+      notify({ "You ditched the cart", "and ran! Lost onions,", "kept your cash." })
+    else
+      jail(3)
+      notify({ "Caught running!", "Onions seized,", "3 days in jail." })
+    end
   end
 end
 
@@ -833,13 +869,15 @@ local function main_menu()
     local actions = { "Buy", "Sell", "Travel" }
     if in_loop then actions[#actions + 1] = "Bank" end
     actions[#actions + 1] = "Stash"
-    actions[#actions + 1] = "Quit"
+    actions[#actions + 1] = "Scores"
+    -- No "Quit" row: CANCEL quits (and saves) from here, which keeps the menu
+    -- within the 9-line panel even in The Loop (Bank + Scores present).
     if cursor > #actions then cursor = #actions end
 
     -- Cash is in the header. 2 status lines + up to 6 actions = <=8 lines here
     -- (+1 header = <=9 total), each <=23 chars wide.
     local lines = {
-      "ONIONWARS  D" .. S.day .. "/" .. TOTAL_DAYS .. "  HP " .. S.hp,
+      "ONIONWARS  Day " .. S.day .. "/" .. TOTAL_DAYS,
       CITIES[S.city] .. " Owe " .. onions(S.debt),
     }
     for i, a in ipairs(actions) do
@@ -868,8 +906,8 @@ local function main_menu()
         local ended = do_travel()
         if ended then return "ended" end
         save_game()
-      elseif a == "Quit" then
-        save_game(); return "quit"
+      elseif a == "Scores" then
+        show_leaderboard()
       end
     end
     save_game()
@@ -886,7 +924,7 @@ local function game_over()
   -- liquidate held drugs at current prices into the final score
   local final = net_worth()
   local why
-  if S.hp <= 0 then why = "State shut you down."
+  if S.hp <= 0 then why = "Held indefinitely."
   else why = "Out of time. Game over." end
 
   -- Persist a personal best so repeat plays have a target.
@@ -904,7 +942,9 @@ local function game_over()
   if is_best then lines[#lines + 1] = "NEW BEST!"
   elseif best then lines[#lines + 1] = "Best: " .. onions(best) end
 
-  -- ONLINE hook: report this score to a staked match if one is configured.
+  -- ONLINE hooks: post to the global high-score board (free play too), and
+  -- report into a staked match if one is configured.
+  submit_global_score(final)
   report_score(final)
 
   notify(lines)
@@ -977,6 +1017,89 @@ function request_loan(real_onions)
     return true
   end
   return false
+end
+
+-- Post this run's final net worth to the global high-score board. Best-effort
+-- and silent: no real onions move, so it runs in free play too. Skips quietly
+-- if the badge has no network identity yet. The server keeps each player's best
+-- score, keyed by onion id.
+function submit_global_score(final)
+  if not (onion.http_post and onion.onion_id and onion.onion_id()) then return end
+  local wallet = onion.wallet and onion.wallet() or ""
+  local body = string.format(
+    '{"onionId":%s,"wallet":"%s","score":%d,"day":%d}',
+    tostring(onion.onion_id()), wallet, math.floor(final), S.day)
+  pcall(function()
+    onion.http_post(LEADERBOARD_URL, body,
+      { content_type = "application/json", timeout_ms = 8000 })
+  end)
+end
+
+-- Fetch the top players from the global board. Returns a list of
+-- { name, score } (highest first) or nil on any failure. Parses the JSON
+-- response with plain Lua patterns (no JSON lib on the badge): the server
+-- returns { "players": [ { "name": "...", "score": N, "day": D }, ... ] }.
+function fetch_leaderboard()
+  if not onion.http_get then return nil end
+  local ok, resp = pcall(function()
+    return onion.http_get(LEADERBOARD_URL .. "?limit=" .. LEADERBOARD_TOP,
+      { timeout_ms = 8000 })
+  end)
+  if not (ok and type(resp) == "table" and resp.status
+          and resp.status >= 200 and resp.status < 300 and resp.body) then
+    return nil
+  end
+  local players = {}
+  -- Walk each JSON object; read name/score order-independently within it.
+  for obj in resp.body:gmatch("{(.-)}") do
+    local name  = obj:match('"name"%s*:%s*"(.-)"')
+    local score = tonumber(obj:match('"score"%s*:%s*(%-?%d+)'))
+    if score then
+      players[#players + 1] = { name = name or "anon", score = score }
+    end
+  end
+  return players
+end
+
+-- "Scores" menu screen: pull the global top-N and show a ranked list. Falls
+-- back to the local personal best if the board can't be reached. Pages through
+-- the list with UP/DOWN so all LEADERBOARD_TOP players fit the 9-line panel.
+function show_leaderboard()
+  screen({ "LEADERBOARD", "", "Loading top " .. LEADERBOARD_TOP .. "..." },
+    { font = "small", no_header = true })
+  local players = fetch_leaderboard()
+  if not players or #players == 0 then
+    local best = tonumber(onion.kv_get and onion.kv_get("ow_best") or "") or nil
+    local rows = { "LEADERBOARD", "", "Board unavailable." }
+    if best then rows[#rows + 1] = "Your best: " .. onions(best) end
+    notify(rows)
+    return
+  end
+
+  -- No Cash header here, so the budget is: 1 title + PAGE rows + 1 footer = 9.
+  local PAGE = 7
+  local pages = math.ceil(#players / PAGE)
+  local page = 1
+  local prev = onion.buttons()
+  while true do
+    local first = (page - 1) * PAGE
+    local rows = { "LEADERBOARD " .. page .. "/" .. pages }
+    for i = first + 1, math.min(first + PAGE, #players) do
+      local p = players[i]
+      local nm = p.name
+      if #nm > 9 then nm = nm:sub(1, 9) end
+      -- "%2d name(<=9) score" stays within the 22-char line width.
+      rows[#rows + 1] = string.format("%2d %-9s %s", i, nm, onions(p.score))
+    end
+    rows[#rows + 1] = (pages > 1) and "[v] page  [SEL] back" or "[SELECT] back"
+    screen(rows, { font = "small", no_header = true })
+
+    local btn = wait_button(prev)
+    if btn == "select" or btn == "cancel" then return
+    elseif btn == "down" or btn == "right" then page = page % pages + 1
+    elseif btn == "up" or btn == "left" then page = (page - 2) % pages + 1
+    end
+  end
 end
 
 -------------------------------------------------------------------------------
