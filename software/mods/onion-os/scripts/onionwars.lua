@@ -68,13 +68,6 @@ local WINNER_PCT = 80
 local TAX_PCT    = 20
 local TAX_HANDLE = "@chicagotax"
 
--- Global leaderboard. Every finished run posts its final net worth to a global
--- high-score board (no real onions move -- this is just bragging rights), and
--- the "Scores" menu item fetches the current top players. Works in free play
--- AND staked matches; needs a player identity (onion.onion_id) to submit, but
--- anyone can view. See ONIONWARS.md for the server contract.
-local LEADERBOARD_URL   = "https://oniondao.dev/api/games/onionwars/leaderboard"
-local LEADERBOARD_TOP   = 10  -- how many players to fetch/show
 
 -- Onion Loan: spend real onions to take out a bigger in-game loan (more buying
 -- power). Each real onion buys LOAN_RATE in-game onions of cash, added to your
@@ -844,72 +837,19 @@ local function do_sell()
 end
 
 -------------------------------------------------------------------------------
--- Onion Loan: spend real onions for in-game buying power (see request_loan)
--------------------------------------------------------------------------------
-
-local function do_loan()
-  local in_match = active_match() ~= nil
-  local R = 0
-  local prev = onion.buttons()
-  while true do
-    local ingame = R * LOAN_RATE
-    local tax = math.floor(R * TAX_PCT / 100)
-    local pot = R - tax
-    screen({
-      "ONION LOAN",
-      in_match and ("Spend " .. R .. " onions") or ("Loan size " .. R .. " (free)"),
-      "Buy power +" .. onions(ingame),
-      "Debt +" .. onions(ingame),
-      in_match and ("Tax " .. tax .. " -> " .. TAX_HANDLE) or "(free play, no charge)",
-      in_match and ("Pot " .. pot) or "",
-      "UP/DN +-1   LR +-10",
-      "SELECT ok   CANCEL back",
-    }, { font = "small" })
-    local btn = wait_button(prev)
-    if btn == "up" then R = math.min(LOAN_MAX_ONIONS, R + 1)
-    elseif btn == "down" then R = math.max(0, R - 1)
-    elseif btn == "right" then R = math.min(LOAN_MAX_ONIONS, R + 10)
-    elseif btn == "left" then R = math.max(0, R - 10)
-    elseif btn == "cancel" then return
-    elseif btn == "select" then
-      if R <= 0 then return end
-      local grant = R * LOAN_RATE
-      if in_match then
-        notify({ "Requesting loan...",
-          "Approve the " .. onions(R) .. " payment",
-          "on your badge." })
-        if request_loan(R) then
-          S.cash = S.cash + grant; S.debt = S.debt + grant
-          notify({ "Loan approved!",
-            "+" .. onions(grant) .. " buying power.",
-            "Debt is now " .. onions(S.debt) .. "." })
-        else
-          notify({ "Loan payment failed.", "No onions were charged." })
-        end
-      else
-        S.cash = S.cash + grant; S.debt = S.debt + grant
-        notify({ "Loan granted (free).",
-          "+" .. onions(grant) .. " buying power.",
-          "Debt is now " .. onions(S.debt) .. "." })
-      end
-      return
-    end
-  end
-end
-
--------------------------------------------------------------------------------
--- Bank + loan shark (The Loop only)
+-- Dealer / loan shark (The Loop only)
 -------------------------------------------------------------------------------
 
 local function do_bank()
   local cursor = 1
-  local actions = { "Pay debt", "Borrow", "Onion Loan", "Deposit", "Withdraw" }
+  -- Deposit/Withdraw (bank savings) and Onion Loan (real onions) are parked
+  -- until OnionDAO is fully on-chain; only the Dealer (pay/borrow) is live.
+  local actions = { "Pay debt", "Borrow" }
   local prev = onion.buttons()
   while true do
-    -- Cash is in the header. title + 1 status + 5 actions + footer (+header) = 9.
     local lines = {
-      "BANK - The Loop",
-      "Owe " .. onions(S.debt) .. "  Bank " .. onions(S.bank),
+      "DEALER - The Loop",
+      "Owe " .. onions(S.debt),
     }
     for i, a in ipairs(actions) do
       lines[#lines + 1] = ((i == cursor) and "> " or "  ") .. a
@@ -935,18 +875,6 @@ local function do_bank()
           { step = 100, bigstep = 1000 })
         if qty > 0 then S.cash = S.cash + qty; S.debt = S.debt + qty
           notify({ "Borrowed " .. onions(qty) .. ".", "Owe " .. onions(S.debt) }) end
-      elseif a == "Onion Loan" then
-        do_loan()
-      elseif a == "Deposit" then
-        local qty = pick_quantity("Deposit to bank", 1, S.cash,
-          { step = 100, bigstep = 1000 })
-        if qty > 0 then S.cash = S.cash - qty; S.bank = S.bank + qty
-          notify({ "Deposited " .. onions(qty) .. ".", "Bank " .. onions(S.bank) }) end
-      elseif a == "Withdraw" then
-        local qty = pick_quantity("Withdraw from bank", 1, S.bank,
-          { step = 100, bigstep = 1000 })
-        if qty > 0 then S.bank = S.bank - qty; S.cash = S.cash + qty
-          notify({ "Withdrew " .. onions(qty) .. ".", "Cash " .. onions(S.cash) }) end
       end
     end
   end
@@ -1009,9 +937,7 @@ local function main_menu()
     local actions = { "Buy", "Sell", "Travel" }
     if in_loop then actions[#actions + 1] = "Bank" end
     actions[#actions + 1] = "Stash"
-    actions[#actions + 1] = "Scores"
-    -- No "Quit" row: CANCEL quits (and saves) from here, which keeps the menu
-    -- within the 9-line panel even in The Loop (Bank + Scores present).
+    actions[#actions + 1] = "Quit"  -- CANCEL also quits (and saves)
     if cursor > #actions then cursor = #actions end
 
     -- Cash is in the header. 2 status lines + up to 6 actions = <=8 lines here
@@ -1053,8 +979,8 @@ local function main_menu()
         local ended = do_travel()
         if ended then return "ended" end
         save_game()
-      elseif a == "Scores" then
-        show_leaderboard()
+      elseif a == "Quit" then
+        save_game(); return "quit"
       end
     end
     save_game()
@@ -1093,9 +1019,7 @@ local function game_over()
   if is_best then lines[#lines + 1] = "NEW BEST!"
   elseif best then lines[#lines + 1] = "Best: " .. onions(best) end
 
-  -- ONLINE hooks: post to the global high-score board (free play too), and
-  -- report into a staked match if one is configured.
-  submit_global_score(final)
+  -- ONLINE hook: report into a staked match if one is configured (parked).
   report_score(final)
 
   notify(lines, { no_header = true })
@@ -1168,89 +1092,6 @@ function request_loan(real_onions)
     return true
   end
   return false
-end
-
--- Post this run's final net worth to the global high-score board. Best-effort
--- and silent: no real onions move, so it runs in free play too. Skips quietly
--- if the badge has no network identity yet. The server keeps each player's best
--- score, keyed by onion id.
-function submit_global_score(final)
-  if not (onion.http_post and onion.onion_id and onion.onion_id()) then return end
-  local wallet = onion.wallet and onion.wallet() or ""
-  local body = string.format(
-    '{"onionId":%s,"wallet":"%s","score":%d,"day":%d}',
-    tostring(onion.onion_id()), wallet, math.floor(final), S.day)
-  pcall(function()
-    onion.http_post(LEADERBOARD_URL, body,
-      { content_type = "application/json", timeout_ms = 8000 })
-  end)
-end
-
--- Fetch the top players from the global board. Returns a list of
--- { name, score } (highest first) or nil on any failure. Parses the JSON
--- response with plain Lua patterns (no JSON lib on the badge): the server
--- returns { "players": [ { "name": "...", "score": N, "day": D }, ... ] }.
-function fetch_leaderboard()
-  if not onion.http_get then return nil end
-  local ok, resp = pcall(function()
-    return onion.http_get(LEADERBOARD_URL .. "?limit=" .. LEADERBOARD_TOP,
-      { timeout_ms = 8000 })
-  end)
-  if not (ok and type(resp) == "table" and resp.status
-          and resp.status >= 200 and resp.status < 300 and resp.body) then
-    return nil
-  end
-  local players = {}
-  -- Walk each JSON object; read name/score order-independently within it.
-  for obj in resp.body:gmatch("{(.-)}") do
-    local name  = obj:match('"name"%s*:%s*"(.-)"')
-    local score = tonumber(obj:match('"score"%s*:%s*(%-?%d+)'))
-    if score then
-      players[#players + 1] = { name = name or "anon", score = score }
-    end
-  end
-  return players
-end
-
--- "Scores" menu screen: pull the global top-N and show a ranked list. Falls
--- back to the local personal best if the board can't be reached. Pages through
--- the list with UP/DOWN so all LEADERBOARD_TOP players fit the 9-line panel.
-function show_leaderboard()
-  screen({ "LEADERBOARD", "", "Loading top " .. LEADERBOARD_TOP .. "..." },
-    { font = "small", no_header = true })
-  local players = fetch_leaderboard()
-  if not players or #players == 0 then
-    local best = tonumber(onion.kv_get and onion.kv_get("ow_best") or "") or nil
-    local rows = { "LEADERBOARD", "", "Board unavailable." }
-    if best then rows[#rows + 1] = "Your best: " .. onions(best) end
-    notify(rows)
-    return
-  end
-
-  -- No Cash header here, so the budget is: 1 title + PAGE rows + 1 footer = 9.
-  local PAGE = 7
-  local pages = math.ceil(#players / PAGE)
-  local page = 1
-  local prev = onion.buttons()
-  while true do
-    local first = (page - 1) * PAGE
-    local rows = { "LEADERBOARD " .. page .. "/" .. pages }
-    for i = first + 1, math.min(first + PAGE, #players) do
-      local p = players[i]
-      local nm = p.name
-      if #nm > 9 then nm = nm:sub(1, 9) end
-      -- "%2d name(<=9) score" stays within the 22-char line width.
-      rows[#rows + 1] = string.format("%2d %-9s %s", i, nm, onions(p.score))
-    end
-    rows[#rows + 1] = (pages > 1) and "[v] page  [SEL] back" or "[SELECT] back"
-    screen(rows, { font = "small", no_header = true })
-
-    local btn = wait_button(prev)
-    if btn == "select" or btn == "cancel" then return
-    elseif btn == "down" or btn == "right" then page = page % pages + 1
-    elseif btn == "up" or btn == "left" then page = (page - 2) % pages + 1
-    end
-  end
 end
 
 -------------------------------------------------------------------------------
