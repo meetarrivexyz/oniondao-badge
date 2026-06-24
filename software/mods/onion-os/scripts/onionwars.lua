@@ -231,19 +231,26 @@ local LH       = 18    -- line height (font is FreeMono9pt, ~18px tall)
 local TOP_Y    = 16    -- baseline of the first line
 local MAX_CHARS = 22   -- safe characters per line at x=6
 
--- Draw a full screen in one batched e-paper refresh.
+-- Draw a full screen in one batched e-paper refresh. Unless opts.no_header is
+-- set, a persistent "Cash N" wallet line is drawn at the very top of every
+-- screen so the player always sees their spendable onions.
 local function screen(lines, opts)
   opts = opts or {}
   local x  = opts.x or 6
   local y  = opts.y or TOP_Y
   local lh = opts.lh or LH
   local font = opts.font or "small"
+  local out = lines
+  if S and S.cash and not opts.no_header then
+    out = { "Cash " .. commas(S.cash) }
+    for _, l in ipairs(lines) do out[#out + 1] = l end
+  end
   if onion.display_begin then
     onion.display_begin()
-    onion.display_lines(lines, x, y, lh, { clear = true, font = font })
+    onion.display_lines(out, x, y, lh, { clear = true, font = font })
     onion.display_commit()
   else
-    onion.display_lines(lines, x, y, lh, { clear = true, font = font })
+    onion.display_lines(out, x, y, lh, { clear = true, font = font })
   end
 end
 
@@ -429,10 +436,9 @@ local function travel_events()
     if S.cash >= price then
       local prev = onion.buttons()
       screen({
-        "Lobbyist: lawyer on",
+        "Lobbyist: a lawyer",
         "vs Pritzker raids.",
         "Price " .. onions(price),
-        "Cash " .. onions(S.cash),
         "",
         "SELECT buy  CANCEL pass",
       }, { font = "bold" })
@@ -455,7 +461,6 @@ local function travel_events()
         "Supplier: bigger cart",
         "+40 crates.",
         "Price " .. onions(price),
-        "Cash " .. onions(S.cash),
         "",
         "SELECT buy  CANCEL skip",
       }, { font = "bold" })
@@ -513,7 +518,6 @@ local function list_screen(title, rows, cursor, footer)
     local marker = (i == cursor) and ">" or " "
     lines[#lines + 1] = marker .. " " .. r
   end
-  lines[#lines + 1] = ""
   lines[#lines + 1] = footer
   screen(lines, { font = "small" })
 end
@@ -578,7 +582,7 @@ local function do_sell()
     end
     if cursor > #holdings then cursor = #holdings end
 
-    list_screen("SELL  cash " .. onions(S.cash),
+    list_screen("SELL",
       rows, cursor, "SELECT sell CANCEL back")
     local btn = wait_button(prev)
     if btn == "up" then cursor = cursor - 1; if cursor < 1 then cursor = #holdings end
@@ -664,11 +668,10 @@ local function do_bank()
   local actions = { "Pay debt", "Borrow", "Onion Loan", "Deposit", "Withdraw" }
   local prev = onion.buttons()
   while true do
-    -- 3 status lines + 5 actions + footer = 9 lines.
+    -- Cash is in the header. title + 1 status + 5 actions + footer (+header) = 9.
     local lines = {
       "BANK - The Loop",
-      "Cash " .. onions(S.cash) .. " Owe " .. onions(S.debt),
-      "Bank " .. onions(S.bank),
+      "Owe " .. onions(S.debt) .. "  Bank " .. onions(S.bank),
     }
     for i, a in ipairs(actions) do
       lines[#lines + 1] = ((i == cursor) and "> " or "  ") .. a
@@ -763,11 +766,11 @@ local function main_menu()
     actions[#actions + 1] = "Quit"
     if cursor > #actions then cursor = #actions end
 
-    -- 3 status lines + up to 6 actions = <=9 lines, each <=22 chars wide.
+    -- Cash is in the header. 2 status lines + up to 6 actions = <=8 lines here
+    -- (+1 header = <=9 total), each <=23 chars wide.
     local lines = {
-      "ONIONWARS  Day " .. S.day .. "/" .. TOTAL_DAYS,
-      CITIES[S.city] .. "  HP " .. S.hp,
-      "Cash " .. onions(S.cash) .. " Owe " .. onions(S.debt),
+      "ONIONWARS  D" .. S.day .. "/" .. TOTAL_DAYS .. "  HP " .. S.hp,
+      CITIES[S.city] .. " Owe " .. onions(S.debt),
     }
     for i, a in ipairs(actions) do
       lines[#lines + 1] = ((i == cursor) and "> " or "  ") .. a
@@ -824,14 +827,12 @@ local function game_over()
   clear_save() -- next launch starts a new run
 
   local lines = {
-    "=== GAME OVER ===",
+    "GAME OVER",
     why,
-    "",
-    "Final net worth:",
-    "  " .. onions(final),
+    "Net worth: " .. onions(final),
   }
-  if best then lines[#lines + 1] = "Previous best: " .. onions(best) end
-  if is_best then lines[#lines + 1] = ">> NEW PERSONAL BEST <<" end
+  if is_best then lines[#lines + 1] = "NEW BEST!"
+  elseif best then lines[#lines + 1] = "Best: " .. onions(best) end
 
   -- ONLINE hook: report this score to a staked match if one is configured.
   report_score(final)
