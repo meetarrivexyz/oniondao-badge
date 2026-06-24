@@ -192,7 +192,7 @@ end
 -- Save / load (single compact NVS key, kv_set value limit is ~1024 bytes)
 -------------------------------------------------------------------------------
 
-local SAVE_KEY = "ow_save"
+local SAVE_KEY = "ow_save2"  -- bumped to discard pre-30-day saves; starts fresh
 
 local function serialize()
   -- flat, order-stable: day|city|cash|debt|bank|hp|coat|gun|over|inv0,inv1,...
