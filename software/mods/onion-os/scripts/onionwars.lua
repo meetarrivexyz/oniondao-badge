@@ -28,7 +28,7 @@
 local TOTAL_DAYS   = 15
 local START_CASH   = 2000
 local START_DEBT   = 5500
-local START_HP     = 20
+local START_HP     = 30
 local START_COAT   = 100
 local DEBT_RATE    = 0.10   -- loan shark interest per day
 local BANK_RATE     = 0.05  -- savings interest per day
@@ -373,20 +373,20 @@ local function raid_encounter()
     local btn = wait_button(prev)
 
     if btn == "select" and S.gun > 0 then
-      if chance(60) then
+      if chance(70) then
         agents = agents - 1
         notify({ "Your lawyer got one", "charge thrown out!", "Agents left: " .. agents })
       else
-        local dmg = rnd(1, 5)
+        local dmg = rnd(1, 3)
         S.hp = S.hp - dmg
         notify({ "They slapped you with", "fines & bad press.", "-" .. dmg .. " standing (now " .. S.hp .. ")" })
       end
     elseif btn == "cancel" then -- run
-      if chance(65) then
+      if chance(72) then
         notify({ "You ditched the cart", "and slipped them. Phew." })
         return
       else
-        local dmg = rnd(1, 4)
+        local dmg = rnd(1, 2)
         S.hp = S.hp - dmg
         notify({ "Cited on the way out.", "-" .. dmg .. " standing." })
       end
