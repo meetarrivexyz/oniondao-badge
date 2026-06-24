@@ -25,7 +25,7 @@
 -- Constants
 -------------------------------------------------------------------------------
 
-local TOTAL_DAYS   = 10
+local TOTAL_DAYS   = 15
 local START_CASH   = 2000
 local START_DEBT   = 5500
 local START_HP     = 20
@@ -80,6 +80,18 @@ local CITIES = {
   "Lincoln Park",
 }
 local BANK_CITY = "The Loop"  -- bank + loan shark live here (Chicago downtown)
+
+-- Per-neighborhood price level, indexed to match CITIES. Onions cost more in
+-- affluent areas and less in rougher ones, so buy cheap (Englewood/South Side)
+-- and sell high (Lincoln Park/The Loop). Applied to every market price.
+local CITY_MULT = {
+  1.15,  -- The Loop      (downtown, pricey)
+  0.85,  -- South Side
+  0.90,  -- West Side
+  1.10,  -- Wicker Park   (trendy)
+  0.80,  -- Englewood     (cheapest)
+  1.25,  -- Lincoln Park  (most affluent)
+}
 
 -------------------------------------------------------------------------------
 -- State
@@ -298,10 +310,11 @@ end
 -- random price in its range. Returns event text lines (price shocks) if any.
 local function generate_market()
   local events = {}
+  local mult = CITY_MULT[S.city] or 1.0
   S.market = {}
   for i, d in ipairs(DRUGS) do
     if chance(80) then
-      S.market[i] = rnd(d.low, d.high)
+      S.market[i] = math.max(1, math.floor(rnd(d.low, d.high) * mult))
     else
       S.market[i] = 0 -- not available here today
     end
@@ -311,7 +324,7 @@ local function generate_market()
   if chance(18) then
     -- Demand spike: price spikes WAY up.
     local i = rnd(1, #DRUGS)
-    S.market[i] = math.floor(DRUGS[i].high * (1.5 + math.random()))
+    S.market[i] = math.floor(DRUGS[i].high * (1.5 + math.random()) * mult)
     local n = DRUGS[i].name
     local up = {
       { "Viral TikTok demand!", n .. " soaring!" },
@@ -324,7 +337,7 @@ local function generate_market()
   elseif chance(18) then
     -- Glut: price crashes WAY down.
     local i = rnd(1, #DRUGS)
-    S.market[i] = math.max(1, math.floor(DRUGS[i].low / 3))
+    S.market[i] = math.max(1, math.floor(DRUGS[i].low / 3 * mult))
     local n = DRUGS[i].name
     local down = {
       { "FDA recall flood!", n .. " cheap!" },
@@ -390,6 +403,24 @@ local function raid_encounter()
   end
 end
 
+-- A 20% shakedown. "Math of the game decides" whether they take 20% of your
+-- cash on hand or 20% of all your onions (cash + bank). Deducts and returns the
+-- amount lost plus a label ("cash" or "onions").
+local function shakedown_20()
+  if rnd(1, 2) == 1 then
+    local loss = math.floor(S.cash * 0.20)
+    S.cash = S.cash - loss
+    return loss, "cash"
+  else
+    local total = S.cash + S.bank
+    local loss = math.floor(total * 0.20)
+    local from_cash = math.min(loss, S.cash)
+    S.cash = S.cash - from_cash
+    S.bank = S.bank - (loss - from_cash)
+    return loss, "onions"
+  end
+end
+
 local function travel_events()
   -- Pritzker-raid chance scales with how much contraband you are carrying.
   local risk = 10 + math.floor(carried() / 10)
@@ -427,6 +458,31 @@ local function travel_events()
       { "Mugged on the L!", "Lost: " .. hit },
     }
     notify(laws[rnd(1, #laws)])
+    return
+  end
+
+  -- Jiaming films your onion buy on her iPhone -- pay to delete the footage.
+  if S.cash > 100 and chance(12) then
+    local loss, basis = shakedown_20()
+    notify({
+      "Jiaming filmed your",
+      "onion buy on iPhone!",
+      "Pay to delete it.",
+      "Lost 20% of " .. basis .. ":",
+      "-" .. onions(loss),
+    })
+    return
+  end
+
+  -- Police chase -- you escape in a Tippi5star Uber, for a price.
+  if S.cash > 100 and chance(12) then
+    local loss, basis = shakedown_20()
+    notify({
+      "Cops on you! You jumped",
+      "in a Tippi5star Uber.",
+      "Payoff: 20% of " .. basis,
+      "-" .. onions(loss),
+    })
     return
   end
 
@@ -479,29 +535,38 @@ end
 -- Quantity picker (shared by buy / sell)
 -------------------------------------------------------------------------------
 
--- title lines, unit price, max units. Returns chosen qty (0 = cancel).
-local function pick_quantity(title, unit_price, max_units)
+-- title, unit price, max units, opts {step, bigstep, start}. Returns chosen qty
+-- (0 = cancel). For money operations pass unit_price = 1 with bigger steps; the
+-- screen then shows a plain Amount instead of Unit/Qty/Cost.
+local function pick_quantity(title, unit_price, max_units, opts)
+  opts = opts or {}
+  local step = opts.step or 1
+  local big  = opts.bigstep or 10
   if max_units <= 0 then
     notify({ title, "Nothing to do here." })
     return 0
   end
-  local qty = 0
+  local qty = math.min(opts.start or 0, max_units)
   local prev = onion.buttons()
   while true do
-    screen({
-      title,
-      "Unit " .. onions(unit_price),
-      "Qty " .. qty .. " (max " .. max_units .. ")",
-      "Cost " .. onions(qty * unit_price),
-      "",
-      "UP/DN +-1   LR +-10",
-      "SELECT ok   CANCEL back",
-    }, { font = "small" })
+    local lines = { title }
+    if unit_price ~= 1 then
+      lines[#lines + 1] = "Unit " .. onions(unit_price)
+      lines[#lines + 1] = "Qty " .. qty .. " (max " .. max_units .. ")"
+      lines[#lines + 1] = "Cost " .. onions(qty * unit_price)
+    else
+      lines[#lines + 1] = "Amount " .. onions(qty)
+      lines[#lines + 1] = "(max " .. onions(max_units) .. ")"
+    end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "UP/DN +-" .. step .. "  LR +-" .. big
+    lines[#lines + 1] = "SELECT ok   CANCEL back"
+    screen(lines, { font = "small" })
     local btn = wait_button(prev)
-    if btn == "up" then qty = math.min(max_units, qty + 1)
-    elseif btn == "down" then qty = math.max(0, qty - 1)
-    elseif btn == "right" then qty = math.min(max_units, qty + 10)
-    elseif btn == "left" then qty = math.max(0, qty - 10)
+    if btn == "up" then qty = math.min(max_units, qty + step)
+    elseif btn == "down" then qty = math.max(0, qty - step)
+    elseif btn == "right" then qty = math.min(max_units, qty + big)
+    elseif btn == "left" then qty = math.max(0, qty - big)
     elseif btn == "select" then return qty
     elseif btn == "cancel" then return 0
     end
@@ -687,21 +752,26 @@ local function do_bank()
       local a = actions[cursor]
       if a == "Pay debt" then
         local max_pay = math.min(S.cash, S.debt)
-        local qty = pick_quantity("Pay debt", 1, max_pay)
+        -- default to paying the max so SELECT clears as much debt as possible
+        local qty = pick_quantity("Pay debt", 1, max_pay,
+          { step = 100, bigstep = 1000, start = max_pay })
         if qty > 0 then S.cash = S.cash - qty; S.debt = S.debt - qty
           notify({ "Paid " .. onions(qty) .. " on debt.", "Owe " .. onions(S.debt) }) end
       elseif a == "Borrow" then
-        local qty = pick_quantity("Borrow (max 5000)", 1, 5000)
+        local qty = pick_quantity("Borrow (max 5000)", 1, 5000,
+          { step = 100, bigstep = 1000 })
         if qty > 0 then S.cash = S.cash + qty; S.debt = S.debt + qty
           notify({ "Borrowed " .. onions(qty) .. ".", "Owe " .. onions(S.debt) }) end
       elseif a == "Onion Loan" then
         do_loan()
       elseif a == "Deposit" then
-        local qty = pick_quantity("Deposit to bank", 1, S.cash)
+        local qty = pick_quantity("Deposit to bank", 1, S.cash,
+          { step = 100, bigstep = 1000 })
         if qty > 0 then S.cash = S.cash - qty; S.bank = S.bank + qty
           notify({ "Deposited " .. onions(qty) .. ".", "Bank " .. onions(S.bank) }) end
       elseif a == "Withdraw" then
-        local qty = pick_quantity("Withdraw from bank", 1, S.bank)
+        local qty = pick_quantity("Withdraw from bank", 1, S.bank,
+          { step = 100, bigstep = 1000 })
         if qty > 0 then S.bank = S.bank - qty; S.cash = S.cash + qty
           notify({ "Withdrew " .. onions(qty) .. ".", "Cash " .. onions(S.cash) }) end
       end
