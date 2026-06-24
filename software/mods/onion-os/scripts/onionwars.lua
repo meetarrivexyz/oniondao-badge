@@ -222,12 +222,19 @@ end
 -- onions are written with a leading "O" so the e-paper font renders cleanly
 local function onions(n) return "O" .. commas(n) end
 
+-- Layout constants for the 264x176 e-paper panel using FreeMono9pt fonts.
+-- The 9pt mono font advances ~18px per line and ~11px per char, so lines must
+-- be >=18px apart and <=22 chars wide, and at most ~9 lines fit top to bottom.
+local LH       = 18    -- line height (font is FreeMono9pt, ~18px tall)
+local TOP_Y    = 16    -- baseline of the first line
+local MAX_CHARS = 22   -- safe characters per line at x=6
+
 -- Draw a full screen in one batched e-paper refresh.
 local function screen(lines, opts)
   opts = opts or {}
   local x  = opts.x or 6
-  local y  = opts.y or 16
-  local lh = opts.lh or 16
+  local y  = opts.y or TOP_Y
+  local lh = opts.lh or LH
   local font = opts.font or "small"
   if onion.display_begin then
     onion.display_begin()
@@ -244,7 +251,7 @@ local function notify(lines)
   for _, l in ipairs(lines) do rows[#rows + 1] = l end
   rows[#rows + 1] = ""
   rows[#rows + 1] = "[SELECT] continue"
-  screen(rows, { font = "small", lh = 16 })
+  screen(rows, { font = "small" })
   local last = onion.buttons()
   while true do
     local b = onion.buttons()
@@ -298,10 +305,10 @@ local function generate_market()
     S.market[i] = math.floor(DRUGS[i].high * (1.5 + math.random()))
     local n = DRUGS[i].name
     local up = {
-      { "A TikTok chef goes viral.", n .. " demand is exploding!" },
-      { "Foodies will pay anything", "for " .. n .. " right now!" },
-      { "Restaurant week hits Chicago:", n .. " prices through the roof!" },
-      { "Sec. Kennedy calls " .. n, "a superfood. Prices soar!" },
+      { "Viral TikTok demand!", n .. " soaring!" },
+      { "Foodies pay a premium!", n .. " is hot!" },
+      { "Restaurant week hits!", n .. " up big!" },
+      { "Kennedy: a superfood!", n .. " soars!" },
     }
     local m = up[rnd(1, #up)]
     events[#events + 1] = m[1]; events[#events + 1] = m[2]
@@ -311,9 +318,9 @@ local function generate_market()
     S.market[i] = math.max(1, math.floor(DRUGS[i].low / 3))
     local n = DRUGS[i].name
     local down = {
-      { "FDA recall floods the market:", n .. " dumped dirt cheap!" },
-      { "Cook County seizure auction:", n .. " going for nothing!" },
-      { "Bumper harvest downstate:", n .. " glut, prices crash!" },
+      { "FDA recall flood!", n .. " cheap!" },
+      { "Cook County auction!", n .. " crashes!" },
+      { "Bumper harvest!", n .. " glut!" },
     }
     local m = down[rnd(1, #down)]
     events[#events + 1] = m[1]; events[#events + 1] = m[2]
@@ -333,14 +340,14 @@ local function raid_encounter()
   while agents > 0 and S.hp > 0 do
     local prev = onion.buttons()
     screen({
-      "FDA RAID! SEC. KENNEDY'S",
-      "NEW FOOD BILL: " .. agents .. " agent(s)",
-      "want your onions seized.",
-      "Standing: " .. S.hp .. "   Lawyers: " .. S.gun,
+      "FDA RAID!",
+      agents .. " agents want your",
+      "onions (Kennedy bill).",
+      "Standing " .. S.hp .. "  Law " .. S.gun,
       "",
-      S.gun > 0 and "[SELECT] Lawyer up" or "(no lawyer to fight)",
-      "[CANCEL] Ditch the cart & run",
-    }, { font = "bold", lh = 16 })
+      S.gun > 0 and "SELECT Lawyer up" or "(no lawyer)",
+      "CANCEL Ditch & run",
+    }, { font = "bold" })
     local btn = wait_button(prev)
 
     if btn == "select" and S.gun > 0 then
@@ -354,12 +361,12 @@ local function raid_encounter()
       end
     elseif btn == "cancel" then -- run
       if chance(65) then
-        notify({ "You ditched the cart and", "slipped the inspectors. Phew." })
+        notify({ "You ditched the cart", "and slipped them. Phew." })
         return
       else
         local dmg = rnd(1, 4)
         S.hp = S.hp - dmg
-        notify({ "They cited you on the way", "out. -" .. dmg .. " standing" })
+        notify({ "Cited on the way out.", "-" .. dmg .. " standing." })
       end
     end
     -- any other button just redraws the raid prompt
@@ -369,8 +376,8 @@ local function raid_encounter()
   if agents <= 0 and S.hp > 0 then
     local loot = rnd(200, 1500)
     S.cash = S.cash + loot
-    notify({ "Case dismissed! You",
-      "countersued and won " .. onions(loot) .. "." })
+    notify({ "Case dismissed!",
+      "Countersued, won " .. onions(loot) })
   end
 end
 
@@ -389,11 +396,11 @@ local function travel_events()
     local amt = rnd(2, math.min(8, space_left()))
     S.inv[i] = S.inv[i] + amt
     local finds = {
-      "A produce truck tipped over!",
-      "You raided a grocery dumpster!",
-      "Found an abandoned farm stand!",
+      "Produce truck spilled!",
+      "Raided a dumpster!",
+      "Abandoned farm stand!",
     }
-    notify({ finds[rnd(1, #finds)], "Grabbed " .. amt .. " " .. DRUGS[i].name .. "." })
+    notify({ finds[rnd(1, #finds)], "Grabbed " .. amt .. " " .. DRUGS[i].name })
     return
   end
 
@@ -402,22 +409,13 @@ local function travel_events()
     local pct = rnd(10, 30)
     local loss = math.floor(S.cash * (pct / 100))
     S.cash = S.cash - loss
+    local hit = "-" .. onions(loss) .. " (" .. pct .. "%)"
     local laws = {
-      { "Gov. JB Pritzker signs a new",
-        "digital-asset law. The state",
-        "skims " .. pct .. "% of your wallet:",
-        "-" .. onions(loss) .. "." },
-      { "Mayor's office hikes the",
-        "Chicago Digital Asset Tax.",
-        pct .. "% off your wallet: -" .. onions(loss) .. "." },
-      { "Cook County levies an",
-        "emergency contraband fee.",
-        "-" .. pct .. "% wallet: -" .. onions(loss) .. "." },
-      { "IL Dept of Revenue audits you.",
-        "Back taxes assessed:",
-        "-" .. onions(loss) .. " (" .. pct .. "%)." },
-      { "You got mugged on the L!",
-        "Lost " .. onions(loss) .. " cash (" .. pct .. "%)." },
+      { "Gov. JB Pritzker signs", "a digital-asset law.", "State skims wallet:", hit },
+      { "Mayor hikes the Chicago", "Digital Asset Tax.", "Hit: " .. hit },
+      { "Cook County contraband", "fee assessed.", "Hit: " .. hit },
+      { "IL Dept of Revenue", "audits you. Back taxes:", hit },
+      { "Mugged on the L!", "Lost: " .. hit },
     }
     notify(laws[rnd(1, #laws)])
     return
@@ -429,13 +427,13 @@ local function travel_events()
     if S.cash >= price then
       local prev = onion.buttons()
       screen({
-        "A lobbyist offers a lawyer",
-        "on retainer (fights FDA raids).",
-        "Price: " .. onions(price),
-        "Cash:  " .. onions(S.cash),
+        "Lobbyist: lawyer on",
+        "retainer vs FDA raids.",
+        "Price " .. onions(price),
+        "Cash " .. onions(S.cash),
         "",
-        "[SELECT] Retain  [CANCEL] Pass",
-      }, { font = "bold", lh = 16 })
+        "SELECT buy  CANCEL pass",
+      }, { font = "bold" })
       local btn
       repeat btn = wait_button(prev) until btn == "select" or btn == "cancel"
       if btn == "select" then
@@ -452,12 +450,13 @@ local function travel_events()
     if S.cash >= price then
       local prev = onion.buttons()
       screen({
-        "A supplier offers a bigger",
-        "produce cart (+40 crates).",
-        "Price: " .. onions(price),
+        "Supplier: bigger cart",
+        "+40 crates.",
+        "Price " .. onions(price),
+        "Cash " .. onions(S.cash),
         "",
-        "[SELECT] Buy   [CANCEL] Skip",
-      }, { font = "bold", lh = 17 })
+        "SELECT buy  CANCEL skip",
+      }, { font = "bold" })
       local btn
       repeat btn = wait_button(prev) until btn == "select" or btn == "cancel"
       if btn == "select" then
@@ -476,7 +475,7 @@ end
 -- title lines, unit price, max units. Returns chosen qty (0 = cancel).
 local function pick_quantity(title, unit_price, max_units)
   if max_units <= 0 then
-    notify({ title, "Nothing you can do here." })
+    notify({ title, "Nothing to do here." })
     return 0
   end
   local qty = 0
@@ -484,13 +483,13 @@ local function pick_quantity(title, unit_price, max_units)
   while true do
     screen({
       title,
-      "Unit: " .. onions(unit_price),
-      "Qty:  " .. qty .. "  (max " .. max_units .. ")",
-      "Cost: " .. onions(qty * unit_price),
+      "Unit " .. onions(unit_price),
+      "Qty " .. qty .. " (max " .. max_units .. ")",
+      "Cost " .. onions(qty * unit_price),
       "",
-      "UP/DN +-1  L/R +-10",
-      "[SELECT] confirm  [CANCEL] back",
-    }, { font = "small", lh = 16 })
+      "UP/DN +-1   LR +-10",
+      "SELECT ok   CANCEL back",
+    }, { font = "small" })
     local btn = wait_button(prev)
     if btn == "up" then qty = math.min(max_units, qty + 1)
     elseif btn == "down" then qty = math.max(0, qty - 1)
@@ -514,7 +513,7 @@ local function list_screen(title, rows, cursor, footer)
   end
   lines[#lines + 1] = ""
   lines[#lines + 1] = footer
-  screen(lines, { font = "small", lh = 15, y = 14 })
+  screen(lines, { font = "small" })
 end
 
 local function do_buy()
@@ -531,13 +530,13 @@ local function do_buy()
       end
     end
     if #available == 0 then
-      notify({ "Nothing for sale here today.", "Try another borough." })
+      notify({ "Nothing for sale today.", "Try another borough." })
       return
     end
     if cursor > #available then cursor = #available end
 
-    list_screen("BUY  cash " .. onions(S.cash) .. "  free " .. space_left(),
-      rows, cursor, "[SELECT] buy  [CANCEL] back")
+    list_screen("BUY  free " .. space_left(),
+      rows, cursor, "SELECT buy  CANCEL back")
     local btn = wait_button(prev)
     if btn == "up" then cursor = cursor - 1; if cursor < 1 then cursor = #available end
     elseif btn == "down" then cursor = cursor + 1; if cursor > #available then cursor = 1 end
@@ -567,8 +566,8 @@ local function do_sell()
       if S.inv[i] > 0 then
         holdings[#holdings + 1] = i
         local p = S.market[i] or 0
-        local pl = p > 0 and onions(p) or "(no buyer)"
-        rows[#rows + 1] = d.name .. " x" .. S.inv[i] .. "  " .. pl
+        local pl = p > 0 and onions(p) or "--"
+        rows[#rows + 1] = d.name .. " " .. pl
       end
     end
     if #holdings == 0 then
@@ -578,7 +577,7 @@ local function do_sell()
     if cursor > #holdings then cursor = #holdings end
 
     list_screen("SELL  cash " .. onions(S.cash),
-      rows, cursor, "[SELECT] sell  [CANCEL] back")
+      rows, cursor, "SELECT sell CANCEL back")
     local btn = wait_button(prev)
     if btn == "up" then cursor = cursor - 1; if cursor < 1 then cursor = #holdings end
     elseif btn == "down" then cursor = cursor + 1; if cursor > #holdings then cursor = 1 end
@@ -613,15 +612,15 @@ local function do_loan()
     local tax = math.floor(R * TAX_PCT / 100)
     local pot = R - tax
     screen({
-      "TAKE OUT AN ONION LOAN",
-      in_match and ("Spend real onions: " .. R) or ("Loan size: " .. R .. " (free play)"),
-      "Buying power: +" .. onions(ingame),
-      "Added to your debt: +" .. onions(ingame),
-      in_match and (tax .. " tax -> " .. TAX_HANDLE .. ", " .. pot .. " -> pot")
-        or "(no real onions charged in free play)",
-      "UP/DN +-1   L/R +-10",
-      "[SELECT] confirm   [CANCEL] back",
-    }, { font = "small", lh = 15, y = 13 })
+      "ONION LOAN",
+      in_match and ("Spend " .. R .. " onions") or ("Loan size " .. R .. " (free)"),
+      "Buy power +" .. onions(ingame),
+      "Debt +" .. onions(ingame),
+      in_match and ("Tax " .. tax .. " -> " .. TAX_HANDLE) or "(free play, no charge)",
+      in_match and ("Pot " .. pot) or "",
+      "UP/DN +-1   LR +-10",
+      "SELECT ok   CANCEL back",
+    }, { font = "small" })
     local btn = wait_button(prev)
     if btn == "up" then R = math.min(LOAN_MAX_ONIONS, R + 1)
     elseif btn == "down" then R = math.max(0, R - 1)
@@ -634,7 +633,7 @@ local function do_loan()
       if in_match then
         notify({ "Requesting loan...",
           "Approve the " .. onions(R) .. " payment",
-          "on your badge to continue." })
+          "on your badge." })
         if request_loan(R) then
           S.cash = S.cash + grant; S.debt = S.debt + grant
           notify({ "Loan approved!",
@@ -645,7 +644,7 @@ local function do_loan()
         end
       else
         S.cash = S.cash + grant; S.debt = S.debt + grant
-        notify({ "Loan granted (free play).",
+        notify({ "Loan granted (free).",
           "+" .. onions(grant) .. " buying power.",
           "Debt is now " .. onions(S.debt) .. "." })
       end
@@ -660,20 +659,21 @@ end
 
 local function do_bank()
   local cursor = 1
-  local actions = { "Pay debt", "Borrow (in-game)", "Onion Loan (real)", "Deposit", "Withdraw" }
+  local actions = { "Pay debt", "Borrow", "Onion Loan", "Deposit", "Withdraw" }
   local prev = onion.buttons()
   while true do
-    list_screen(
-      "DEALER & BANK (The Loop)",
-      {
-        "Cash:  " .. onions(S.cash),
-        "Debt:  " .. onions(S.debt) .. " (+" .. math.floor(DEBT_RATE * 100) .. "%/day)",
-        "Bank:  " .. onions(S.bank) .. " (+" .. math.floor(BANK_RATE * 100) .. "%/day)",
-        "-- " .. actions[cursor] .. " --",
-      },
-      4,
-      "UP/DN pick  [SELECT] do  [CANCEL] back")
-    -- The cursor highlights line 4; show the action menu compactly.
+    -- 3 status lines + 5 actions + footer = 9 lines.
+    local lines = {
+      "BANK - The Loop",
+      "Cash " .. onions(S.cash) .. " Owe " .. onions(S.debt),
+      "Bank " .. onions(S.bank),
+    }
+    for i, a in ipairs(actions) do
+      lines[#lines + 1] = ((i == cursor) and "> " or "  ") .. a
+    end
+    lines[#lines + 1] = "[CANCEL] back"
+    screen(lines, { font = "small" })
+
     local btn = wait_button(prev)
     if btn == "up" then cursor = cursor - 1; if cursor < 1 then cursor = #actions end
     elseif btn == "down" then cursor = cursor + 1; if cursor > #actions then cursor = 1 end
@@ -682,23 +682,23 @@ local function do_bank()
       local a = actions[cursor]
       if a == "Pay debt" then
         local max_pay = math.min(S.cash, S.debt)
-        local qty = pick_quantity("Pay debt (1 onion steps)", 1, max_pay)
+        local qty = pick_quantity("Pay debt", 1, max_pay)
         if qty > 0 then S.cash = S.cash - qty; S.debt = S.debt - qty
-          notify({ "Paid " .. onions(qty) .. " on debt.", "Debt: " .. onions(S.debt) }) end
-      elseif a == "Borrow (in-game)" then
-        local qty = pick_quantity("Borrow in-game (max 5000)", 1, 5000)
+          notify({ "Paid " .. onions(qty) .. " on debt.", "Owe " .. onions(S.debt) }) end
+      elseif a == "Borrow" then
+        local qty = pick_quantity("Borrow (max 5000)", 1, 5000)
         if qty > 0 then S.cash = S.cash + qty; S.debt = S.debt + qty
-          notify({ "Borrowed " .. onions(qty) .. ".", "Debt: " .. onions(S.debt) }) end
-      elseif a == "Onion Loan (real)" then
+          notify({ "Borrowed " .. onions(qty) .. ".", "Owe " .. onions(S.debt) }) end
+      elseif a == "Onion Loan" then
         do_loan()
       elseif a == "Deposit" then
         local qty = pick_quantity("Deposit to bank", 1, S.cash)
         if qty > 0 then S.cash = S.cash - qty; S.bank = S.bank + qty
-          notify({ "Deposited " .. onions(qty) .. ".", "Bank: " .. onions(S.bank) }) end
+          notify({ "Deposited " .. onions(qty) .. ".", "Bank " .. onions(S.bank) }) end
       elseif a == "Withdraw" then
         local qty = pick_quantity("Withdraw from bank", 1, S.bank)
         if qty > 0 then S.bank = S.bank - qty; S.cash = S.cash + qty
-          notify({ "Withdrew " .. onions(qty) .. ".", "Cash: " .. onions(S.cash) }) end
+          notify({ "Withdrew " .. onions(qty) .. ".", "Cash " .. onions(S.cash) }) end
       end
     end
   end
@@ -721,8 +721,8 @@ local function do_travel()
     for i, c in ipairs(CITIES) do
       rows[#rows + 1] = c .. (i == S.city and "  (here)" or "")
     end
-    list_screen("JET WHERE?  (day " .. S.day .. "/" .. TOTAL_DAYS .. ")",
-      rows, cursor, "[SELECT] go  [CANCEL] stay")
+    list_screen("TRAVEL  Day " .. S.day .. "/" .. TOTAL_DAYS,
+      rows, cursor, "SELECT go  CANCEL stay")
     local btn = wait_button(prev)
     if btn == "up" then cursor = cursor - 1; if cursor < 1 then cursor = #CITIES end
     elseif btn == "down" then cursor = cursor + 1; if cursor > #CITIES then cursor = 1 end
@@ -754,24 +754,23 @@ local function main_menu()
   local cursor = 1
   local prev = onion.buttons()
   while not S.over do
-    local in_bronx = CITIES[S.city] == BANK_CITY
-    local actions = { "Buy", "Sell", "Jet (travel)" }
-    if in_bronx then actions[#actions + 1] = "Dealer & Bank" end
-    actions[#actions + 1] = "Stash report"
-    actions[#actions + 1] = "Save & quit"
+    local in_loop = CITIES[S.city] == BANK_CITY
+    local actions = { "Buy", "Sell", "Travel" }
+    if in_loop then actions[#actions + 1] = "Bank" end
+    actions[#actions + 1] = "Stash"
+    actions[#actions + 1] = "Quit"
     if cursor > #actions then cursor = #actions end
 
+    -- 3 status lines + up to 6 actions = <=9 lines, each <=22 chars wide.
     local lines = {
-      "ONIONWARS  day " .. S.day .. "/" .. TOTAL_DAYS,
-      CITIES[S.city] .. "   Standing " .. S.hp .. "  Law " .. S.gun,
-      "Cash " .. onions(S.cash) .. "  Debt " .. onions(S.debt),
-      "Cart " .. carried() .. "/" .. S.coat .. "   Bank " .. onions(S.bank),
-      "",
+      "ONIONWARS  Day " .. S.day .. "/" .. TOTAL_DAYS,
+      CITIES[S.city] .. "  HP " .. S.hp,
+      "Cash " .. onions(S.cash) .. " Owe " .. onions(S.debt),
     }
     for i, a in ipairs(actions) do
       lines[#lines + 1] = ((i == cursor) and "> " or "  ") .. a
     end
-    screen(lines, { font = "small", lh = 15, y = 13 })
+    screen(lines, { font = "small" })
 
     local btn = wait_button(prev)
     if btn == "up" then cursor = cursor - 1; if cursor < 1 then cursor = #actions end
@@ -782,19 +781,19 @@ local function main_menu()
       local a = actions[cursor]
       if a == "Buy" then do_buy()
       elseif a == "Sell" then do_sell()
-      elseif a == "Dealer & Bank" then do_bank()
-      elseif a == "Stash report" then
+      elseif a == "Bank" then do_bank()
+      elseif a == "Stash" then
         local rows = { "NET WORTH: " .. onions(net_worth()), "" }
         for i, d in ipairs(DRUGS) do
           if S.inv[i] > 0 then rows[#rows + 1] = d.name .. " x" .. S.inv[i] end
         end
         if #rows == 2 then rows[#rows + 1] = "(cart is empty)" end
         notify(rows)
-      elseif a == "Jet (travel)" then
+      elseif a == "Travel" then
         local ended = do_travel()
         if ended then return "ended" end
         save_game()
-      elseif a == "Save & quit" then
+      elseif a == "Quit" then
         save_game(); return "quit"
       end
     end
@@ -812,8 +811,8 @@ local function game_over()
   -- liquidate held drugs at current prices into the final score
   local final = net_worth()
   local why
-  if S.hp <= 0 then why = "The FDA shut you down for good."
-  else why = TOTAL_DAYS .. " days are up. Game over." end
+  if S.hp <= 0 then why = "The FDA shut you down."
+  else why = "Out of time. Game over." end
 
   -- Persist a personal best so repeat plays have a target.
   local best = tonumber(onion.kv_get and onion.kv_get("ow_best") or "") or nil
@@ -874,11 +873,11 @@ function report_score(final)
   end)
   if ok then
     notify({
-      "Score reported to match " .. match .. ".",
-      "At settlement the Dealer escrow",
-      "pays " .. WINNER_PCT .. "% to the highest net",
-      "worth; " .. TAX_PCT .. "% Chicago Digital",
-      "Asset Tax goes to " .. TAX_HANDLE .. ".",
+      "Score sent: " .. match,
+      "Pot pays " .. WINNER_PCT .. "% to the",
+      "top net worth,",
+      TAX_PCT .. "% tax to",
+      TAX_HANDLE .. ".",
     })
   end
 end
@@ -913,25 +912,25 @@ end
 
 local function intro_if_new(is_resume)
   if is_resume then
-    notify({ "ONIONWARS", "Resuming your run...",
-      "Day " .. S.day .. "  " .. CITIES[S.city] })
+    notify({ "ONIONWARS", "Resuming run...",
+      "Day " .. S.day .. " - " .. CITIES[S.city] })
   elseif active_match() then
     notify({
       "ONIONWARS",
       "Chicago. Staked match.",
-      "Entry: " .. onions(ENTRY_FEE) .. " (paid).",
-      "Pot: " .. WINNER_PCT .. "% to the top net worth.",
-      TAX_PCT .. "% Chicago Digital Asset Tax",
-      "to " .. TAX_HANDLE .. ". " .. TOTAL_DAYS .. " days. Go.",
+      "Entry " .. onions(ENTRY_FEE) .. " paid.",
+      "Win: top net worth gets",
+      WINNER_PCT .. "% of the pot.",
+      TAX_PCT .. "% tax to " .. TAX_HANDLE,
     })
   else
     notify({
       "ONIONWARS",
-      "Chicago. You owe the Dealer",
-      onions(START_DEBT) .. ". " .. TOTAL_DAYS .. " days to turn",
-      onions(START_CASH) .. " into a fortune.",
-      "Buy low, sell high, dodge",
-      "the FDA. (free play)",
+      "Chicago. Free play.",
+      "You owe " .. onions(START_DEBT) .. ".",
+      onions(START_CASH) .. " to start.",
+      TOTAL_DAYS .. " days. Buy low,",
+      "sell high, dodge FDA.",
     })
   end
 end
