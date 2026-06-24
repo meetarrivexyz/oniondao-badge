@@ -1,7 +1,7 @@
 -- OnionWars (Chicago) -- formerly "Drugwars: Onion Edition"
 -- A badge-native, onion-themed take on the classic trading game, in onions
 -- instead of dollars. Buy low, sell high across Chicago over 2 days, dodge the
--- FDA, pay down the Dealer's loan, and build the biggest stash.
+-- Pritzker law, pay the Dealer loan, and build the biggest stash.
 --
 -- The currency is the OnionDAO "onion" (your badge's Onion token). The in-game
 -- balances (the 2,000 cash / 5,500 debt you start a run with) are an in-game
@@ -332,18 +332,18 @@ end
 -- Random travel events
 -------------------------------------------------------------------------------
 
--- An FDA raid (triggered by Sec. Kennedy's new food bill). You defend with
--- lawyers on retainer (internally still S.gun) or run; raids cost standing
--- (S.hp). Returns once resolved (may end the game if standing hits 0).
+-- A JB Pritzker Law raid (the Governor's new digital-asset crackdown). You
+-- defend with lawyers on retainer (internally still S.gun) or run; raids cost
+-- standing (S.hp). Returns once resolved (may end the game if standing hits 0).
 local function raid_encounter()
   local agents = rnd(1, 3)
   while agents > 0 and S.hp > 0 do
     local prev = onion.buttons()
     screen({
-      "FDA RAID!",
-      agents .. " agents want your",
-      "onions (Kennedy bill).",
-      "Standing " .. S.hp .. "  Law " .. S.gun,
+      "JB PRITZKER LAW!",
+      agents .. " state agents want",
+      "to seize your onions.",
+      "Standing " .. S.hp .. "  Lwyr " .. S.gun,
       "",
       S.gun > 0 and "SELECT Lawyer up" or "(no lawyer)",
       "CANCEL Ditch & run",
@@ -382,7 +382,7 @@ local function raid_encounter()
 end
 
 local function travel_events()
-  -- FDA raid chance scales with how much contraband produce you're carrying.
+  -- Pritzker-raid chance scales with how much contraband you are carrying.
   local risk = 10 + math.floor(carried() / 10)
   if risk > 45 then risk = 45 end
   if carried() > 0 and chance(risk) then
@@ -411,7 +411,7 @@ local function travel_events()
     S.cash = S.cash - loss
     local hit = "-" .. onions(loss) .. " (" .. pct .. "%)"
     local laws = {
-      { "Gov. JB Pritzker signs", "a digital-asset law.", "State skims wallet:", hit },
+      { "Springfield passes a", "surprise grocery levy.", "Hit: " .. hit },
       { "Mayor hikes the Chicago", "Digital Asset Tax.", "Hit: " .. hit },
       { "Cook County contraband", "fee assessed.", "Hit: " .. hit },
       { "IL Dept of Revenue", "audits you. Back taxes:", hit },
@@ -421,14 +421,14 @@ local function travel_events()
     return
   end
 
-  -- Lobbyist offering a lawyer on retainer (your defense in an FDA raid).
+  -- Lobbyist offering a lawyer on retainer (your defense in a Pritzker raid).
   if chance(10) then
     local price = rnd(500, 1200)
     if S.cash >= price then
       local prev = onion.buttons()
       screen({
         "Lobbyist: lawyer on",
-        "retainer vs FDA raids.",
+        "vs Pritzker raids.",
         "Price " .. onions(price),
         "Cash " .. onions(S.cash),
         "",
@@ -811,7 +811,7 @@ local function game_over()
   -- liquidate held drugs at current prices into the final score
   local final = net_worth()
   local why
-  if S.hp <= 0 then why = "The FDA shut you down."
+  if S.hp <= 0 then why = "State shut you down."
   else why = "Out of time. Game over." end
 
   -- Persist a personal best so repeat plays have a target.
@@ -930,7 +930,7 @@ local function intro_if_new(is_resume)
       "You owe " .. onions(START_DEBT) .. ".",
       onions(START_CASH) .. " to start.",
       TOTAL_DAYS .. " days. Buy low,",
-      "sell high, dodge FDA.",
+      "sell high, dodge law.",
     })
   end
 end

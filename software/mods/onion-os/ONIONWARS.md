@@ -32,11 +32,12 @@ The loop is the classic one, with onions as the currency:
   Settled server-side (see Phase 2); simulated in free play.
 - **Produce cart** capacity limits how much you can carry; a supplier sometimes
   offers a `+40`-crate upgrade.
-- **FDA raids, standing, and lawyers.** Onions are food, so the enforcer is the
-  FDA acting on "Sec. Kennedy's new food bill," not the cops. Carrying more
-  contraband produce raises the raid chance. You start with `20` standing;
-  defend with a lawyer on retainer (bought from a lobbyist) or ditch the cart
-  and run. Lose all your standing and the FDA shuts you down (game over).
+- **JB Pritzker Law raids, standing, and lawyers.** The enforcer is the
+  Governor's digital-asset crackdown — state agents come to seize your onions.
+  Carrying more contraband produce raises the raid chance. You start with `20`
+  standing; defend with a lawyer on retainer (bought from a lobbyist) or ditch
+  the cart and run. Lose all your standing and the state shuts you down (game
+  over).
 - **Policy/law events.** Travel can trigger a Chicago/Illinois policy hit that
   skims 10–30% of your wallet (cash) — e.g. "Gov. JB Pritzker signs a new
   digital-asset law", a Chicago Digital Asset Tax hike, a Cook County contraband

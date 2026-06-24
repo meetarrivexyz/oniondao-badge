@@ -87,7 +87,7 @@ to a text-only ASCII-bar mode so the game logic still runs.
 (**OnionWars**), with **onions** as the currency instead of dollars. Buy low and
 sell high across six Chicago neighborhoods over 2 days, manage a produce cart's
 worth of inventory, pay down the Dealer's loan (with daily interest) at the Loop
-bank, dodge **FDA raids** (Sec. Kennedy's new food bill) with your standing and
+bank, dodge **JB Pritzker Law raids** (the Governor's digital-asset crackdown) with your standing and
 a lawyer on retainer, weather Chicago/Illinois policy taxes, and ride random
 market shocks. Score is your final net worth, and a personal best is kept in
 NVS. The whole game runs as a single Lua script and saves progress to NVS, so
