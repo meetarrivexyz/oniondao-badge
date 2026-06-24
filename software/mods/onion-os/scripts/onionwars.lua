@@ -387,8 +387,8 @@ local function raid_encounter()
   local bob_cost   = math.max(200, math.floor(S.cash * 0.20))
   local opts = {}
   if S.gun > 0 then opts[#opts + 1] = { k = "retainer", label = "Use retainer (free)" } end
-  opts[#opts + 1] = { k = "super",  label = "Super lawyer " .. onions(super_cost) }
-  opts[#opts + 1] = { k = "bob",    label = "Bob (mid) " .. onions(bob_cost) }
+  opts[#opts + 1] = { k = "super",  label = "Hire lawyer " .. onions(super_cost) }
+  opts[#opts + 1] = { k = "bob",    label = "Hire lawyer " .. onions(bob_cost) }
   opts[#opts + 1] = { k = "public", label = "Public defender" }
   opts[#opts + 1] = { k = "run",    label = "Ditch cart & run" }
 
@@ -415,11 +415,11 @@ local function raid_encounter()
     notify({ "Your retained lawyer", "got it dropped. Kept", "your onions, no jail." })
   elseif chosen == "super" then
     local pay = math.min(super_cost, S.cash); S.cash = S.cash - pay
-    notify({ "Super lawyer wins!", "Charges dropped.", "Paid " .. onions(pay) .. ", 0 days." })
+    notify({ "Top lawyer wins!", "Charges dropped.", "Paid " .. onions(pay) .. ", 0 days." })
   elseif chosen == "bob" then
     local pay = math.min(bob_cost, S.cash); S.cash = S.cash - pay
     jail(2)
-    notify({ "Bob settled it.", "Paid " .. onions(pay) .. ".", "2 days in County jail." })
+    notify({ "Cheap lawyer settles.", "Paid " .. onions(pay) .. ".", "2 days in County jail." })
   elseif chosen == "public" then
     if chance(20) then
       S.hp = 0 -- held indefinitely -> game over
