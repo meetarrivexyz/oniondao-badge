@@ -926,6 +926,8 @@ end
 -- Main menu / status screen
 -------------------------------------------------------------------------------
 
+local onboarding  -- forward declaration; defined in the Entry section below
+
 local function main_menu()
   local cursor = 1
   local prev = onion.buttons()
@@ -937,7 +939,7 @@ local function main_menu()
     local actions = { "Buy", "Sell", "Travel" }
     if in_loop then actions[#actions + 1] = "Bank" end
     actions[#actions + 1] = "Stash"
-    actions[#actions + 1] = "Quit"  -- CANCEL also quits (and saves)
+    actions[#actions + 1] = "Help"  -- guidance; CANCEL quits (and saves)
     if cursor > #actions then cursor = #actions end
 
     -- Cash is in the header. 2 status lines + up to 6 actions = <=8 lines here
@@ -979,8 +981,8 @@ local function main_menu()
         local ended = do_travel()
         if ended then return "ended" end
         save_game()
-      elseif a == "Quit" then
-        save_game(); return "quit"
+      elseif a == "Help" then
+        onboarding()
       end
     end
     save_game()
@@ -1123,6 +1125,79 @@ local function intro_if_new(is_resume)
   end
 end
 
+-- Onboarding / Help: a few simple, skippable cards that teach the goal,
+-- controls, the core loop, the Dealer/debt, and the dangers. Paged with SELECT;
+-- CANCEL skips the rest. Shown automatically on first run (gated by the ow_intro
+-- NVS flag in run()) and any time from the "Help" menu item. Assigned to the
+-- forward-declared `onboarding` local so main_menu can call it.
+function onboarding()
+  local cards = {
+    {
+      "ONIONWARS",
+      "",
+      "Onion trader in",
+      "Chicago. Buy low,",
+      "sell high, 30 days.",
+      "Richest player wins.",
+    },
+    {
+      "CONTROLS",
+      "",
+      "UP/DN: move, +-1",
+      "L/R: +-10",
+      "SELECT: confirm",
+      "CANCEL: back / quit",
+    },
+    {
+      "HOW TO PLAY",
+      "",
+      "TRAVEL to a hood,",
+      "BUY cheap onions,",
+      "SELL where pricey.",
+      "Watch the prices.",
+    },
+    {
+      "THE DEALER",
+      "",
+      "You owe 5,500.",
+      "Debt grows 10%/day!",
+      "Pay it down FAST at",
+      "the Dealer (The Loop).",
+    },
+    {
+      "WATCH OUT",
+      "",
+      "Carry a lot = raid",
+      "risk + shakedowns.",
+      "Carry less to stay",
+      "safer on the road.",
+    },
+    {
+      "GET RICH",
+      "",
+      "Goal 1,000,000 =",
+      "Onion Kingpin.",
+      "",
+      "SELECT to play!",
+    },
+  }
+  local i = 1
+  local prev = onion.buttons()
+  while i <= #cards do
+    local rows = {}
+    for _, l in ipairs(cards[i]) do rows[#rows + 1] = l end
+    rows[#rows + 1] = (i < #cards)
+      and ("SEL next CAN skip " .. i .. "/" .. #cards)
+      or "SELECT to play!"
+    screen(rows, { font = "small", no_header = true })
+    local btn = wait_button(prev)
+    if btn == "cancel" then return
+    elseif btn == "select" or btn == "right" or btn == "down" then i = i + 1
+    elseif (btn == "left" or btn == "up") and i > 1 then i = i - 1
+    end
+  end
+end
+
 -- Title splash shown at launch: big "ONION WARS" logo, then waits for a press.
 local function splash()
   if onion.display_begin then onion.display_begin() end
@@ -1157,7 +1232,15 @@ local function run()
     S = fresh_state()
   end
 
-  intro_if_new(is_resume)
+  -- First-timers get the onboarding tutorial (once); everyone else gets the
+  -- short resume/staked/free-play card.
+  local seen = onion.kv_get and onion.kv_get("ow_intro")
+  if not is_resume and not active_match() and not seen then
+    onboarding()
+    if onion.kv_set then onion.kv_set("ow_intro", "1") end
+  else
+    intro_if_new(is_resume)
+  end
   if not is_resume or #S.market == 0 then
     local ev = generate_market()
     if #ev > 0 then notify(ev) end
