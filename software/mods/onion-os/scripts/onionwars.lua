@@ -312,13 +312,16 @@ local function screen(lines, opts)
   end
 end
 
--- A blocking message screen: shows lines, waits for SELECT or CANCEL.
-local function notify(lines)
+-- A blocking message screen: shows lines, waits for SELECT or CANCEL. Pass
+-- opts.no_header to drop the persistent "Cash N" line (used by money-summary
+-- screens that already show net worth, to claw back a line on the 9-line panel).
+local function notify(lines, opts)
+  opts = opts or {}
   local rows = {}
   for _, l in ipairs(lines) do rows[#rows + 1] = l end
   rows[#rows + 1] = ""
   rows[#rows + 1] = "[SELECT] continue"
-  screen(rows, { font = "small" })
+  screen(rows, { font = "small", no_header = opts.no_header })
   local last = onion.buttons()
   while true do
     local b = onion.buttons()
@@ -1045,7 +1048,7 @@ local function main_menu()
           if S.inv[i] > 0 then rows[#rows + 1] = d.name .. " x" .. S.inv[i] end
         end
         if #rows == 3 then rows[#rows + 1] = "(cart is empty)" end
-        notify(rows)
+        notify(rows, { no_header = true })
       elseif a == "Travel" then
         local ended = do_travel()
         if ended then return "ended" end
@@ -1078,11 +1081,15 @@ local function game_over()
 
   clear_save() -- next launch starts a new run
 
+  if final > (S.peak or 0) then S.peak = final end
   local lines = {
-    "GAME OVER",
+    "END OF THE MONTH",
     why,
     "Net worth: " .. onions(final),
+    "Rank: " .. rank_title(final),
+    "Peak: " .. onions(S.peak),
   }
+  if final >= GOAL_NET then lines[#lines + 1] = "ONION KINGPIN -- you win!" end
   if is_best then lines[#lines + 1] = "NEW BEST!"
   elseif best then lines[#lines + 1] = "Best: " .. onions(best) end
 
@@ -1091,7 +1098,7 @@ local function game_over()
   submit_global_score(final)
   report_score(final)
 
-  notify(lines)
+  notify(lines, { no_header = true })
 end
 
 -------------------------------------------------------------------------------
@@ -1265,17 +1272,40 @@ local function intro_if_new(is_resume)
     })
   else
     notify({
-      "ONIONWARS",
-      "Chicago. Free play.",
-      "You owe " .. onions(START_DEBT) .. ".",
-      onions(START_CASH) .. " to start.",
-      TOTAL_DAYS .. " days. Buy low,",
-      "sell high, dodge law.",
+      "ONIONWARS - 30 days",
+      "Goal: " .. onions(GOAL_NET) .. " net",
+      "worth = Onion Kingpin.",
+      "Pay the Dealer FAST:",
+      "debt grows 10%/day!",
+      "Buy low, sell high.",
     })
   end
 end
 
+-- Title splash shown at launch: big "ONION WARS" logo, then waits for a press.
+local function splash()
+  if onion.display_begin then onion.display_begin() end
+  onion.display_lines({ "ONION", "WARS" }, 64, 48, 42, { clear = true, font = "large" })
+  onion.display_lines({ "Chicago", "Press SELECT to play" }, 8, 120, 20,
+    { clear = false, font = "small" })
+  if onion.display_commit then onion.display_commit() end
+  local prev = onion.buttons()
+  local start = onion.millis and onion.millis() or nil
+  while true do
+    local b = onion.buttons()
+    if (b.select and not prev.select) or (b.cancel and not prev.cancel)
+       or (b.up and not prev.up) or (b.down and not prev.down)
+       or (b.left and not prev.left) or (b.right and not prev.right) then
+      return
+    end
+    prev = b
+    if start and (onion.millis() - start) > 8000 then return end
+    onion.sleep(60)
+  end
+end
+
 local function run()
+  splash()
   seed_rng()
   local loaded = load_game()
   local is_resume = false
