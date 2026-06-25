@@ -326,6 +326,19 @@ local function usd0(cents)
   return (neg and "-$" or "$") .. commas(dollars)
 end
 
+-- Compact dollars for the header, where space is tight: full commas under
+-- $10k, then "$46K" / "$1.5M" so big balances still fit one line.
+local function usd_abbr(cents)
+  local d = math.floor(math.abs(cents) / 100 + 0.5)
+  local sign = (cents < 0) and "-$" or "$"
+  if d >= 1000000 then
+    return sign .. string.format("%.1f", d / 1000000) .. "M"
+  elseif d >= 10000 then
+    return sign .. math.floor(d / 1000) .. "K"
+  end
+  return sign .. commas(d)
+end
+
 -- milli-SOL -> "5.00 SOL"
 local function sol_str(msol)
   return string.format("%.2f", msol / 1000) .. " SOL"
@@ -349,9 +362,9 @@ local TOP_Y    = 16    -- baseline of the first line
 local MAX_CHARS = 22   -- safe characters per line at x=6
 
 -- Draw a full screen in one batched e-paper refresh. Unless opts.no_header is
--- set, a persistent header is drawn at the top of every screen: your spendable
--- SOL wallet plus the day's exchange rate (1 SOL = $X), so prices shown in SOL
--- always have their dollar context right there.
+-- set, a persistent header is drawn at the top of every screen: your wallet in
+-- both currencies, "N SOL | $N USD", at the day's exchange rate -- so the SOL
+-- prices on the shelves always have their dollar context right there.
 local function screen(lines, opts)
   opts = opts or {}
   local x  = opts.x or 6
@@ -360,7 +373,10 @@ local function screen(lines, opts)
   local font = opts.font or "small"
   local out = lines
   if S and S.sol and not opts.no_header then
-    out = { sol_str(S.sol) .. "  1SOL=" .. usd0(S.sol_price) }
+    local sol = S.sol / 1000
+    local sol_part = (sol < 100) and string.format("%.2f", sol)
+      or commas(math.floor(sol + 0.5))
+    out = { sol_part .. " SOL | " .. usd_abbr(msol_to_usd(S.sol)) .. " USD" }
     for _, l in ipairs(lines) do out[#out + 1] = l end
   end
   if onion.display_begin then
@@ -875,7 +891,7 @@ local function do_buy()
     end
     if cursor > #available then cursor = #available end
 
-    list_screen("BUY (SOL) free " .. space_left(),
+    list_screen("BUY SOL  cart " .. carried() .. "/" .. S.coat,
       rows, cursor, "SELECT buy  CANCEL back")
     local btn = wait_button(prev)
     if btn == "up" then cursor = cursor - 1; if cursor < 1 then cursor = #available end
@@ -919,7 +935,8 @@ local function do_sell()
     end
     if cursor > #holdings then cursor = #holdings end
 
-    list_screen("SELL (SOL)", rows, cursor, "SELECT sell CANCEL back")
+    list_screen("SELL SOL  cart " .. carried() .. "/" .. S.coat,
+      rows, cursor, "SELECT sell CANCEL back")
     local btn = wait_button(prev)
     if btn == "up" then cursor = cursor - 1; if cursor < 1 then cursor = #holdings end
     elseif btn == "down" then cursor = cursor + 1; if cursor > #holdings then cursor = 1 end
