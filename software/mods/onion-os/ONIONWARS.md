@@ -89,137 +89,129 @@ The numbers are fixed in `scripts/onionwars.lua` as `ENTRY_FEE = 100`,
 must match the server's match configuration. The server resolves the
 `@chicagotax` handle to its OnionDAO wallet at settlement.
 
-This *cannot* be done from Lua alone, and the game does not pretend otherwise.
-On this badge, real SPL-token movement only happens when the **server builds a
-Solana transaction and the badge firmware signs it** through the existing
-transaction-approval flow (see `software/mods/onion-os/README.md` →
-"Solana Key Custody" and the `oniondao/badge/{onionId}/transaction/request`
-MQTT topic). So Phase 2 is mostly server + firmware work, with thin Lua hooks.
+This *cannot* be done from Lua alone, and it does not need new core
+`oniondao.dev` routes either — the **OnionDAO Escrow Accounts API already does
+exactly this** (see `API.md` → "Escrow Accounts"). The missing piece is a small
+**OnionWars coordinator** service that holds the secrets and drives the escrow
+API; the badge talks only to the coordinator.
 
-### Trust model
+### Why a coordinator (the badge can't hold secrets)
 
-- The **Dealer escrow wallet** is a server-controlled Onion token account. It
-  is the single source of truth for the pot. Players never send onions to each
-  other — only player→escrow (stake) and escrow→winner (payout).
-- The **server** ranks players and authorizes the two payout transfers (80% to
-  the winner, 20% Chicago Digital Asset Tax to `@chicagotax`). The badge only
-  ever signs *its own* 100-onion stake-in transfer, which it shows the player
-  for approval first. This keeps the existing "badge signs, user approves"
-  custody guarantee intact.
-- Scores are reported by badges but **settled by the server**, which should
-  cross-check reported net worth against the stake/score history to resist a
-  badge lying about its final holdings (e.g. cap payout at pot size, require a
-  minimum number of reported travel days, flag impossible net-worth jumps).
+The escrow routes require `ONION_EXTERNAL_API_KEY` and the per-account
+`accountSecret` — **server secrets that must never ship on a badge.** So:
+
+- The **coordinator** (a tiny server app) holds those secrets and is the only
+  thing that calls `oniondao.dev` escrow routes.
+- The **badge** calls only the coordinator's own simple routes (the
+  `/api/games/onionwars/*` URLs in `onionwars.lua`). The coordinator base URL is
+  wherever you host it — it does not have to be `oniondao.dev`.
+- The **player** approves their own buy-in in `/portal/onions`; if they have a
+  linked badge, that approval is a badge-signed token transfer into escrow
+  custody via the existing badge transaction flow. No money moves without the
+  user's approval.
+
+### How the coordinator maps to the escrow API
+
+- **The pot = one escrow account.** Coordinator calls
+  `POST /api/public/onions/escrow/accounts` (external bearer) once per match,
+  with `externalId = <matchCode>` (idempotent), and stores the returned
+  `accountSecret`.
+- **Buy-in / Onion Loan = an escrow deposit.**
+  `POST /api/public/onions/escrow/accounts/{id}/deposits`
+  `{ "username": "<player>", "amount": 100, "externalId": "buyin_<player>_<match>" }`.
+  The user approves in `/portal/onions`; a linked badge signs the token transfer
+  to custody. The escrow callback (`status:"completed"`) tells the coordinator
+  the buy-in landed.
+- **Payouts = escrow transfers.** At settlement the coordinator ranks players by
+  reported net worth and makes two transfers from the pot:
+  `POST /api/public/onions/escrow/accounts/{id}/transfers`
+  `{ "recipientUsername": "<winner>",   "amount": <80% of pot>, "currencyMode":"auto", "externalId":"payout_winner_<match>" }`
+  `{ "recipientUsername": "chicagotax", "amount": <20% of pot>, "currencyMode":"auto", "externalId":"tax_<match>" }`.
+  Users are addressed by **handle/username** (the API forbids raw wallet
+  addresses), so `@chicagotax` is just `recipientUsername: "chicagotax"`.
+
+Scores have no core API route, so the coordinator owns the score table (the
+badge POSTs its final net worth to the coordinator). The coordinator should
+sanity-check scores (cap payout at pot size, require a minimum number of played
+days, flag impossible jumps) before paying out.
 
 ### Lifecycle
 
 ```
-1. CREATE   organizer asks server to open match "VEGAS25":
-            POST /api/games/onionwars/match
-            { "code":"CHI25", "stake":100, "deadline": <unix>,
-              "split":{ "winnerPct":80, "taxPct":20, "taxHandle":"@chicagotax" } }
-            -> server returns the Dealer escrow wallet address.
+1. CREATE   coordinator opens match "CHI25":
+            -> POST /api/public/onions/escrow/accounts  (external bearer)
+               { "requester":"onionwars", "externalId":"CHI25",
+                 "name":"OnionWars CHI25 pot" }
+            -> store the returned accountSecret for this match.
 
-2. JOIN     each badge pays the 100-onion entry fee:
-            POST /api/games/onionwars/join
-            { "match":"CHI25", "onionId":<id>, "wallet":"<pubkey>" }
-            -> server builds a stake-in transfer (player ATA -> escrow ATA,
-               amount = 100) and pushes it to the badge on
-               oniondao/badge/{onionId}/transaction/request.
-            -> badge shows the approval popup, signs, server submits.
-            -> server marks the player joined once the transfer confirms,
-               and (out of band) writes the match code into the badge's NVS
-               key "ow_match" so onionwars.lua knows it is a staked run.
+2. JOIN     badge -> coordinator: POST /api/games/onionwars/join
+               { "match":"CHI25", "onionId":<id> }
+            coordinator -> escrow deposit (amount = ENTRY_FEE = 100) for the
+               player's username; user approves in /portal/onions (linked badge
+               signs the token transfer to custody).
+            On the "completed" escrow callback the coordinator marks the player
+               joined and (out of band) sets the badge NVS key "ow_match"=CHI25
+               so onionwars.lua knows it is a staked run.
 
-3. PLAY     onionwars.lua runs the normal single-player Chicago loop. The badge
-            already has its in-game 2,000 cash / 5,500 debt to play with.
+3. PLAY     onionwars.lua runs the normal Chicago loop (2,000 cash / 5,500 debt).
 
-3b. LOAN    (optional, any time during play) the player can take out an Onion
-            Loan for more in-game buying power, paying real onions:
-            POST /api/games/onionwars/loan
-            { "match":"CHI25", "onionId":<id>, "wallet":"<pubkey>",
-              "onions":<realOnions>, "taxHandle":"@chicagotax" }
-            -> server builds the real transfer and pushes it to the badge for
-               approval (same transaction-approval flow as JOIN), splitting it:
-                 - taxPct (20%) -> @chicagotax,
-                 - the rest      -> the holding (escrow) wallet, growing the pot.
-            -> once the transfer confirms (server returns HTTP 2xx), the badge
-               credits the loan: in-game cash += onions x LOAN_RATE, and the
-               same amount is added to in-game debt (normal 10%/day interest).
-            In free play (no match) the loan is simulated and no onions move.
+3b. LOAN    badge -> coordinator: POST /api/games/onionwars/loan
+               { "match":"CHI25", "onionId":<id>, "onions":<n> }
+            coordinator -> escrow deposit (amount = n) for the player. On
+               confirm (HTTP 2xx) the badge credits cash += n*LOAN_RATE and adds
+               the same to in-game debt. In free play the loan is simulated.
 
-4. REPORT   on game over the badge posts its final net worth:
-            POST /api/games/onionwars/score
-            { "match":"CHI25", "onionId":<id>, "wallet":"<pubkey>",
-              "score":<netWorth>, "day":<lastDay> }
+4. REPORT   on game over: badge -> coordinator POST /api/games/onionwars/score
+               { "match":"CHI25", "onionId":<id>, "score":<netWorth>, "day":<d> }
 
-5. SETTLE   after the deadline (or once all players have reported), the server
-            ranks by net worth and splits the pot (sum of all 100-onion
-            entries):
-              - 80% -> one escrow->winner transfer to the highest net worth
-                       in OnionDAO,
-              - 20% -> one escrow->tax transfer (City of Chicago Digital Asset
-                       Tax) to the OnionDAO handle @chicagotax's wallet.
-            It then clears the "ow_match" key on every participating badge.
+5. SETTLE   after the deadline the coordinator ranks by net worth and makes the
+            two escrow transfers above (80% winner, 20% chicagotax), then clears
+            "ow_match" on every participating badge.
 ```
 
-### Endpoints the server (`oniondao.dev`) needs to add
+### Coordinator routes (what the badge calls)
 
-| Route | Body | Server responsibility |
-|-------|------|----------------------|
-| `POST /api/games/onionwars/match` | `code, stake (100), deadline, split` | create match, return escrow wallet |
-| `POST /api/games/onionwars/loan`  | `match, onionId, wallet, onions, taxHandle` | build + push the loan transfer (20% to @chicagotax, rest to holding/escrow); credit on confirm |
-| `POST /api/games/onionwars/join`  | `match, onionId, wallet` | build + push stake-in transfer; record join on confirm |
-| `POST /api/games/onionwars/score` | `match, onionId, wallet, score, day` | record reported score (validated) |
+These are implemented by the **OnionWars coordinator**, which translates each to
+the escrow API above. They are not core `oniondao.dev` routes.
+
+| Route | Body | Coordinator does |
+|-------|------|------------------|
+| `POST /api/games/onionwars/join`  | `match, onionId` | escrow **deposit** of `ENTRY_FEE` for the player; set `ow_match` on confirm |
+| `POST /api/games/onionwars/loan`  | `match, onionId, onions` | escrow **deposit** of `onions`; reply 2xx so the badge credits the loan |
+| `POST /api/games/onionwars/score` | `match, onionId, score, day` | record the player's net worth (validated) |
 | `GET  /api/games/onionwars/match/{code}` | – | players, pot size, deadline, status, winner |
-| `POST /api/games/onionwars/leaderboard` | `onionId, wallet, score, day` | upsert player's **best** global score (no tokens move) |
-| `GET  /api/games/onionwars/leaderboard?limit=N` | – | top N players, highest first (see shape below) |
 
-### Global leaderboard (free play too)
+(The badge never sends a wallet address — the coordinator resolves the player
+from `onionId`. `wallet` was dropped from these bodies.)
 
-Separate from staked matches, every finished run posts its final net worth to a
-**global high-score board** — bragging rights only, no onions move — and the
-in-game **"Scores"** menu item fetches and pages through the current top players.
-This works in free play and in staked matches.
-
-`GET /api/games/onionwars/leaderboard?limit=N` must return JSON shaped like:
-
-```json
-{ "players": [ { "name": "alice", "score": 124500, "day": 15 }, ... ] }
-```
-
-- `name` is the display label the server resolves from `onionId`/`wallet` (a
-  handle, or a short wallet like `7xKp..f3`). The badge truncates it to 9 chars.
-- The list must already be sorted highest-first; the badge renders rank by order.
-- The badge parses this with plain Lua patterns (no JSON lib on-device), reading
-  `"name"` and `"score"` within each `{...}` object, so any extra fields are fine.
-
-The stake-in and payout transfers reuse the **existing** badge transaction
-flow; no new firmware signing path is required. The only firmware/Lua-side
-need is a way for the server to set the `ow_match` NVS key on a linked badge
-(either an MQTT command on the badge's existing topic space, or a serial/
-config command), so the game knows it is a staked run.
+The buy-in and payouts reuse the **existing** badge transaction-approval flow;
+no new firmware signing path is required. The only firmware/Lua-side need is a
+way for the coordinator to set the `ow_match` NVS key on a linked badge (an MQTT
+command on the badge's existing topic space, or a serial/config command), so the
+game knows it is a staked run.
 
 ### Hooks already in `onionwars.lua`
 
 The game uses thin hooks that no-op for plain single-player and only activate
-when a match code is present in NVS:
+when a match code is present in NVS **and** `STAKING_ENABLED` is true (it is
+`false` today, so the live game makes no network calls):
 
 - `active_match()` — returns the `ow_match` NVS value, or `nil`.
-- `report_score(final)` — at game over, when a match is active and
-  `onion.http_post` exists, POSTs the final score to
-  `/api/games/onionwars/score`. It **only reports** — it never moves tokens.
+- `report_score(final)` — at game over, when a match is active, POSTs the final
+  net worth to the coordinator's `/api/games/onionwars/score`. It **only
+  reports** — it never moves tokens.
 - `request_loan(real_onions)` — when the player takes an Onion Loan in a match,
-  POSTs to `/api/games/onionwars/loan` and returns `true` only on HTTP 2xx. The
-  badge credits the in-game loan **only** if this returns true, so a failed or
-  declined payment never grants buying power. The actual onion transfer (and
-  the 20%/rest split) is built and submitted by the server.
-- `submit_global_score(final)` — at game over, best-effort POST of the final net
-  worth to `/api/games/onionwars/leaderboard`. Silent and fire-and-forget; skips
-  if the badge has no `onion.onion_id`. Runs in free play too.
-- `fetch_leaderboard()` / `show_leaderboard()` — the "Scores" menu item GETs the
-  global top-N and pages through it (UP/DOWN), falling back to the local personal
-  best (`ow_best`) when the board is unreachable.
+  POSTs to the coordinator's `/api/games/onionwars/loan` and returns `true` only
+  on HTTP 2xx. The badge credits the in-game loan **only** if this returns true,
+  so a failed or declined deposit never grants buying power.
 
-This keeps the on-chain authority server-side while leaving the badge game
-ready to plug into a staked match the moment the server routes exist.
+### Not built yet
+
+- The **coordinator service** itself (holds `ONION_EXTERNAL_API_KEY` + the
+  per-match `accountSecret`, drives the escrow API, owns the score table).
+- A **global free-play leaderboard** — there is no leaderboard route in the core
+  OnionDAO API, so it would also live on the coordinator (or a new core route)
+  and is intentionally absent from the game today.
+
+This keeps on-chain authority and all secrets server-side, while the badge game
+is already wired to plug into a coordinator the moment one exists.
