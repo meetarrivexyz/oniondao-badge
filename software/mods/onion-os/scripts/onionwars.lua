@@ -47,6 +47,9 @@ local RAID_CAP      = 25   -- max raid %
 local POLICY_CHANCE = 10   -- % chance of a policy/tax skim on a travel
 local POLICY_MIN    = 6    -- a policy skim takes POLICY_MIN..POLICY_MAX % of cash
 local POLICY_MAX    = 15
+local FBI_CHANCE    = 8    -- % chance the FBI confiscates carried onions on a travel
+local FBI_MIN       = 20   -- the FBI seizes FBI_MIN..FBI_MAX % of carried onions
+local FBI_MAX       = 40
 local SHAKE_CHANCE  = 7    -- % chance EACH of the Jiaming / Tippi shakedowns
 local SHAKEDOWN_PCT = 12   -- % taken by a shakedown
 local PD_GAMEOVER   = 8    -- public defender: % chance you're held for good
@@ -82,6 +85,23 @@ local API_BASE   = "https://oniondao.dev"
 -- In free play (no staked match) the loan is simulated -- no real onions move.
 local LOAN_RATE       = 100  -- in-game cash granted per real onion spent
 local LOAN_MAX_ONIONS = 100  -- max real onions per loan
+
+-- Cart-upgrade store (Lincoln Park only). Each upgrade adds CART_UPGRADE crates
+-- of capacity. It starts pricey and gets pricier every time, so capacity is a
+-- real money sink, not a one-time freebie. (The cheap random "supplier" cart
+-- event still happens on the road; this is the reliable but expensive option.)
+local CART_CITY      = "Lincoln Park"
+local CART_UPGRADE   = 10     -- crates added per store upgrade
+local CART_BASE_COST = 8000   -- price of your first store upgrade...
+local CART_COST_STEP = 4000   -- ...rising by this much for each one already bought
+
+-- Solana (fake) speculative market, traded at the downtown exchange (The Loop's
+-- finance desk). The "price" walks up and down every day inside a band drawn
+-- from SOL's real last-year range, so it can pay off big or burn you -- pure
+-- speculation with your in-game cash. No real tokens move; this is play money.
+local SOL_MIN   = 95    -- ~ SOL's last-year low (onions)
+local SOL_MAX   = 295   -- ~ SOL's last-year high (onions)
+local SOL_START = 150   -- opening price for a fresh run
 
 -- The contraband you trade. Onion-themed goods, cheapest -> priciest. name,
 -- low price, high price (onions). (Internally still called DRUGS; the table
@@ -138,6 +158,9 @@ local function fresh_state()
     inv      = inv,               -- units held per drug index
     market   = {},                -- price per drug index for current city (0 = unavailable)
     over     = false,
+    sol      = 0,                 -- Solana (fake) units held
+    sol_price = SOL_START,        -- current Solana (fake) price, walks each day
+    cart_lvl = 0,                 -- store cart upgrades bought (sets next price)
     peak     = 0,                 -- best net worth seen this run (runtime only)
     tip      = nil,               -- pending hot-tip { good, city } (runtime only)
   }
@@ -164,8 +187,12 @@ local function stash_value()
   return v
 end
 
+local function sol_value()
+  return (S.sol or 0) * (S.sol_price or 0)
+end
+
 local function net_worth()
-  return S.cash + S.bank + stash_value() - S.debt
+  return S.cash + S.bank + stash_value() + sol_value() - S.debt
 end
 
 -- Rank ladder by net worth -- a title to chase and show off. Thresholds rise
@@ -201,7 +228,10 @@ local function serialize()
   }
   local inv = {}
   for i = 1, #DRUGS do inv[i] = tostring(S.inv[i]) end
+  -- inv stays the 10th |-field; sol / sol_price / cart_lvl are appended after it
+  -- (older saves without them deserialize to safe defaults).
   return table.concat(parts, "|") .. "|" .. table.concat(inv, ",")
+    .. "|" .. S.sol .. "|" .. S.sol_price .. "|" .. S.cart_lvl
 end
 
 local function deserialize(blob)
@@ -223,6 +253,9 @@ local function deserialize(blob)
     st.inv[idx] = tonumber(u) or 0
     idx = idx + 1
   end
+  st.sol       = tonumber(fields[11]) or 0
+  st.sol_price = tonumber(fields[12]) or SOL_START
+  st.cart_lvl  = tonumber(fields[13]) or 0
   return st
 end
 
@@ -414,6 +447,20 @@ end
 -- Random travel events
 -------------------------------------------------------------------------------
 
+-- Move the Solana (fake) price one day. A random shock either way, plus a gentle
+-- pull back toward the middle of the last-year band so it wanders without ever
+-- pinning to a bound. Clamped to [SOL_MIN, SOL_MAX].
+local function walk_sol()
+  local p = S.sol_price or SOL_START
+  local mid = (SOL_MIN + SOL_MAX) / 2
+  local drift = (mid - p) * 0.04            -- mild mean reversion
+  local shock = p * (rnd(-15, 15) / 100)    -- up to +-15% daily swing
+  p = math.floor(p + drift + shock)
+  if p < SOL_MIN then p = SOL_MIN end
+  if p > SOL_MAX then p = SOL_MAX end
+  S.sol_price = p
+end
+
 -- Spend `days` locked up: time passes (debt keeps compounding at the loan-shark
 -- rate) while you can't trade. If this runs past the deadline, do_travel ends
 -- the game on its day check.
@@ -422,6 +469,7 @@ local function jail(days)
     S.day = S.day + 1
     S.debt = math.floor(S.debt * (1 + DEBT_RATE))
     S.bank = math.floor(S.bank * (1 + BANK_RATE))
+    walk_sol()
   end
 end
 
@@ -601,6 +649,26 @@ local function travel_events()
     return
   end
 
+  -- FBI confiscation: feds seize a chunk of the onions you're carrying.
+  if penalties_on and carried() > 0 and chance(FBI_CHANCE) then
+    local pct = rnd(FBI_MIN, FBI_MAX)
+    local seized = 0
+    for i = 1, #DRUGS do
+      local take = math.floor(S.inv[i] * (pct / 100))
+      S.inv[i] = S.inv[i] - take
+      seized = seized + take
+    end
+    if seized > 0 then
+      notify({
+        "FBI raids your stash!",
+        "Feds confiscate your onions.",
+        "Seized " .. seized .. " crates",
+        "(" .. pct .. "%)",
+      })
+      return
+    end
+  end
+
   -- Policy / law event: Springfield & City Hall skim a % of your wallet.
   if penalties_on and S.cash > 200 and chance(POLICY_CHANCE) then
     local pct = rnd(POLICY_MIN, POLICY_MAX)
@@ -608,7 +676,6 @@ local function travel_events()
     S.cash = S.cash - loss
     local hit = "-" .. onions(loss) .. " (" .. pct .. "%)"
     local laws = {
-      { "Springfield passes a", "surprise grocery levy.", "Hit: " .. hit },
       { "Mayor hikes the Chicago", "Digital Asset Tax.", "Hit: " .. hit },
       { "Cook County contraband", "fee assessed.", "Hit: " .. hit },
       { "IL Dept of Revenue", "audits you. Back taxes:", hit },
@@ -843,18 +910,99 @@ local function do_sell()
 end
 
 -------------------------------------------------------------------------------
--- Dealer / loan shark (The Loop only)
+-- Solana (fake) exchange -- buy/sell at the day's price (The Loop finance desk)
+-------------------------------------------------------------------------------
+
+local function do_solana()
+  local cursor = 1
+  local actions = { "Buy SOL", "Sell SOL" }
+  local prev = onion.buttons()
+  while true do
+    local lines = {
+      "SOLANA (fake)",
+      "Price " .. onions(S.sol_price),
+      "Hold " .. S.sol .. " = " .. onions(sol_value()),
+    }
+    for i, a in ipairs(actions) do
+      lines[#lines + 1] = ((i == cursor) and "> " or "  ") .. a
+    end
+    lines[#lines + 1] = "[CANCEL] back"
+    screen(lines, { font = "small" })
+
+    local btn = wait_button(prev)
+    if btn == "up" then cursor = cursor - 1; if cursor < 1 then cursor = #actions end
+    elseif btn == "down" then cursor = cursor + 1; if cursor > #actions then cursor = 1 end
+    elseif btn == "cancel" then return
+    elseif btn == "select" then
+      local price = S.sol_price
+      if actions[cursor] == "Buy SOL" then
+        local max_units = math.floor(S.cash / price)
+        local qty = pick_quantity("Buy SOL", price, max_units)
+        if qty > 0 then
+          S.cash = S.cash - qty * price
+          S.sol = S.sol + qty
+          notify({ "Bought " .. qty .. " SOL", "for " .. onions(qty * price) })
+        end
+      else
+        local qty = pick_quantity("Sell SOL", price, S.sol)
+        if qty > 0 then
+          S.cash = S.cash + qty * price
+          S.sol = S.sol - qty
+          notify({ "Sold " .. qty .. " SOL", "for " .. onions(qty * price) })
+        end
+      end
+    end
+  end
+end
+
+-------------------------------------------------------------------------------
+-- Lincoln Park store -- buy reliable (but pricey) cart-capacity upgrades
+-------------------------------------------------------------------------------
+
+local function do_store()
+  local price = CART_BASE_COST + S.cart_lvl * CART_COST_STEP
+  local prev = onion.buttons()
+  while true do
+    screen({
+      "LINCOLN PARK STORE",
+      "Cart +" .. CART_UPGRADE .. " crates",
+      "Capacity now " .. S.coat,
+      "Price " .. onions(price),
+      "",
+      "SELECT buy  CANCEL back",
+    }, { font = "small" })
+    local btn = wait_button(prev)
+    if btn == "cancel" then return
+    elseif btn == "select" then
+      if S.cash < price then
+        notify({ "Not enough cash.", "Need " .. onions(price) .. ".",
+          "You have " .. onions(S.cash) .. "." })
+      else
+        S.cash = S.cash - price
+        S.coat = S.coat + CART_UPGRADE
+        S.cart_lvl = S.cart_lvl + 1
+        price = CART_BASE_COST + S.cart_lvl * CART_COST_STEP
+        notify({ "Bigger cart!", "Capacity " .. S.coat .. " crates.",
+          "Next upgrade " .. onions(price) })
+      end
+    end
+  end
+end
+
+-------------------------------------------------------------------------------
+-- Dealer / loan shark + Solana exchange (The Loop only)
 -------------------------------------------------------------------------------
 
 local function do_bank()
   local cursor = 1
   -- Deposit/Withdraw (bank savings) and Onion Loan (real onions) are parked
-  -- until OnionDAO is fully on-chain; only the Dealer (pay/borrow) is live.
-  local actions = { "Pay debt", "Borrow" }
+  -- until OnionDAO is fully on-chain; the Dealer (pay/borrow) and the Solana
+  -- (fake) exchange are live.
+  local actions = { "Pay debt", "Borrow", "Solana" }
   local prev = onion.buttons()
   while true do
     local lines = {
-      "DEALER - The Loop",
+      "THE LOOP DESK",
       "Owe " .. onions(S.debt),
     }
     for i, a in ipairs(actions) do
@@ -881,6 +1029,8 @@ local function do_bank()
           { step = 100, bigstep = 1000 })
         if qty > 0 then S.cash = S.cash + qty; S.debt = S.debt + qty
           notify({ "Borrowed " .. onions(qty) .. ".", "Owe " .. onions(S.debt) }) end
+      elseif a == "Solana" then
+        do_solana()
       end
     end
   end
@@ -893,6 +1043,7 @@ end
 local function accrue_interest()
   S.debt = math.floor(S.debt * (1 + DEBT_RATE))
   S.bank = math.floor(S.bank * (1 + BANK_RATE))
+  walk_sol()
 end
 
 local function do_travel()
@@ -942,8 +1093,10 @@ local function main_menu()
     local nw_now = net_worth()
     if nw_now > (S.peak or 0) then S.peak = nw_now end
     local in_loop = CITIES[S.city] == BANK_CITY
+    local in_store = CITIES[S.city] == CART_CITY
     local actions = { "Buy", "Sell", "Travel" }
     if in_loop then actions[#actions + 1] = "Bank" end
+    if in_store then actions[#actions + 1] = "Store" end
     actions[#actions + 1] = "Stash"
     actions[#actions + 1] = "Help"  -- guidance; CANCEL quits (and saves)
     if cursor > #actions then cursor = #actions end
@@ -969,6 +1122,7 @@ local function main_menu()
       if a == "Buy" then do_buy()
       elseif a == "Sell" then do_sell()
       elseif a == "Bank" then do_bank()
+      elseif a == "Store" then do_store()
       elseif a == "Stash" then
         local nw = net_worth()
         local pct = math.floor(nw / GOAL_NET * 100)
@@ -978,10 +1132,14 @@ local function main_menu()
           rank_title(nw) .. "  (" .. pct .. "% to goal)",
           "",
         }
+        local n0 = #rows
         for i, d in ipairs(DRUGS) do
           if S.inv[i] > 0 then rows[#rows + 1] = d.name .. " x" .. S.inv[i] end
         end
-        if #rows == 3 then rows[#rows + 1] = "(cart is empty)" end
+        if S.sol > 0 then
+          rows[#rows + 1] = "SOL x" .. S.sol .. " @ " .. onions(S.sol_price)
+        end
+        if #rows == n0 then rows[#rows + 1] = "(cart is empty)" end
         notify(rows, { no_header = true })
       elseif a == "Travel" then
         local ended = do_travel()
@@ -1194,6 +1352,14 @@ function onboarding()
       "risk + shakedowns.",
       "Carry less to stay",
       "safer on the road.",
+    },
+    {
+      "SIDE PLAYS",
+      "",
+      "Lincoln Park STORE:",
+      "buy cart space (pricey).",
+      "The Loop BANK: trade",
+      "Solana (fake) - it swings!",
     },
     {
       "GET RICH",
