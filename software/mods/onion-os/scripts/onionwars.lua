@@ -1,7 +1,10 @@
 -- OnionWars (Chicago) -- formerly "Drugwars: Onion Edition"
 -- A badge-native, onion-themed take on the classic trading game, in onions
--- instead of dollars. Buy low, sell high across Chicago over 2 days, dodge the
--- Pritzker law, pay the Dealer loan, and build the biggest stash.
+-- instead of dollars. Buy low, sell high across six Chicago neighborhoods over
+-- 30 days; pay off the Dealer loan before the 10%/day juice buries you; dodge
+-- Pritzker raids, FBI onion seizures, and shakedowns; upgrade your cart at the
+-- Lincoln Park store; and gamble spare cash on the (fake) Solana market to
+-- build the biggest stash and become the Onion Kingpin.
 --
 -- The currency is the OnionDAO "onion" (your badge's Onion token). The in-game
 -- balances (the 2,000 cash / 5,500 debt you start a run with) are an in-game
