@@ -67,6 +67,12 @@ local ENTRY_FEE  = 100
 local WINNER_PCT = 80
 local TAX_PCT    = 20
 local TAX_HANDLE = "@chicagotax"
+-- OnionDAO username/handle that holds the match pot (an app-owned account).
+-- The badge moves a player's buy-in/loan onions here via an approved transfer;
+-- payouts back out are done server-side (escrow), see ONIONWARS.md.
+local POT_HANDLE = "onionwars"
+-- Base URL of the real OnionDAO API (see software/mods/onion-os/API.md).
+local API_BASE   = "https://oniondao.dev"
 
 
 -- Onion Loan: spend real onions to take out a bigger in-game loan (more buying
@@ -1021,21 +1027,20 @@ local function game_over()
   if is_best then lines[#lines + 1] = "NEW BEST!"
   elseif best then lines[#lines + 1] = "Best: " .. onions(best) end
 
-  -- ONLINE hook: report into a staked match if one is configured (parked).
-  report_score(final)
-
   notify(lines, { no_header = true })
 end
 
 -------------------------------------------------------------------------------
 -- ONLINE / staked-match hooks (Phase 2 — see ONIONWARS.md)
 -------------------------------------------------------------------------------
--- These are deliberately thin. Moving REAL onions (stake in, payout to the
--- winner) requires the oniondao.dev server to build the SPL token transfer and
--- the badge firmware to sign it through the existing transaction-approval flow.
--- Until those server routes exist, these no-op unless a match code is present
--- in NVS (set out-of-band), and they only REPORT scores — they never claim to
--- have moved tokens on their own.
+-- The badge's one real-onion action is the Onion Loan: it moves the player's
+-- onions to the match pot through the REAL OnionDAO API (API.md -> "Onion
+-- Requests": POST /api/public/onions/requests, then poll the request id). The
+-- user approves the transfer in /portal/onions and a linked badge signs it. The
+-- pot, the 80/20 winner/tax payout, and any scoring are server-side (escrow,
+-- see ONIONWARS.md) -- the badge never holds secrets or moves the pot itself.
+-- All of this is gated behind STAKING_ENABLED (false) and an ow_apikey in NVS,
+-- so in free play the game makes no network calls at all.
 
 -- Returns the configured match code, or nil for plain single-player.
 function active_match()
@@ -1046,54 +1051,72 @@ function active_match()
   return nil
 end
 
--- POST the final score to the match coordinator. The server is responsible for
--- ranking players by drugs/net-worth and instructing the Dealer escrow wallet
--- to pay the winner. See ONIONWARS.md for the full contract.
-function report_score(final)
-  local match = active_match()
-  if not match then return end
-  if not (onion.http_post and onion.onion_id) then return end
-  local wallet = onion.wallet and onion.wallet() or ""
+-- Pull a JSON string field with a plain Lua pattern (no JSON lib on-device).
+local function json_field(body, key)
+  if type(body) ~= "string" then return nil end
+  return body:match('"' .. key .. '"%s*:%s*"([^"]*)"')
+end
+
+-- The OnionDAO external API key, provisioned out-of-band into NVS (never
+-- hardcoded). Without it, no real-onion action can run.
+local function external_key()
+  local k = onion.kv_get and onion.kv_get("ow_apikey")
+  if k and k ~= "" then return k end
+  return nil
+end
+
+-- Move `amount` onions from the current player to `recipient` (a handle) using
+-- the real Onion Requests API (API.md -> "Onion Requests"): create a transfer
+-- request, then poll until it settles. The user approves in /portal/onions and a
+-- linked badge signs the token transfer. Returns true only on "completed".
+local function onion_transfer(recipient, amount, note, ext_id)
+  if not (onion.http_post and onion.http_get and onion.username) then return false end
+  local key = external_key()
+  if not key then return false end
+  local headers = { Authorization = "Bearer " .. key }
   local body = string.format(
-    '{"match":"%s","onionId":%s,"wallet":"%s","score":%d,"day":%d}',
-    match, tostring(onion.onion_id()), wallet, math.floor(final), S.day)
-  local ok = pcall(function()
-    onion.http_post("https://oniondao.dev/api/games/onionwars/score", body,
-      { content_type = "application/json", timeout_ms = 8000 })
+    '{"type":"transfer","username":"%s","recipientUsername":"%s","amount":%d,'
+    .. '"requester":"onionwars","externalId":"%s","note":"%s"}',
+    onion.username(), recipient, math.floor(amount), ext_id, note)
+  local ok, resp = pcall(function()
+    return onion.http_post(API_BASE .. "/api/public/onions/requests", body,
+      { content_type = "application/json", headers = headers, timeout_ms = 15000 })
   end)
-  if ok then
-    notify({
-      "Score sent: " .. match,
-      "Pot pays " .. WINNER_PCT .. "% to the",
-      "top net worth,",
-      TAX_PCT .. "% tax to",
-      TAX_HANDLE .. ".",
-    })
+  if not ok or type(resp) ~= "table" or not resp.status
+     or resp.status < 200 or resp.status >= 300 then
+    return false
+  end
+  local id = json_field(resp.body, "id")
+  if not id then return false end
+  -- Poll for settlement: pending -> awaiting_badge_signature -> completed.
+  local deadline = (onion.millis and onion.millis() or 0) + 90000
+  while true do
+    onion.sleep(2000)
+    local gok, gresp = pcall(function()
+      return onion.http_get(API_BASE .. "/api/public/onions/requests/" .. id,
+        { headers = headers, timeout_ms = 10000 })
+    end)
+    if gok and type(gresp) == "table" then
+      local st = json_field(gresp.body, "status")
+      if st == "completed" then return true end
+      if st == "denied" or st == "failed" then return false end
+    end
+    if onion.millis and onion.millis() > deadline then return false end
   end
 end
 
--- Request an Onion Loan of `real_onions` real onions. In a staked match this
--- asks the server to build the real transfer (TAX_PCT to @chicagotax, the rest
--- to the holding/escrow wallet) and push it to the badge for approval through
--- the existing transaction-approval flow; the server credits the loan only once
--- that transfer confirms. Returns true if the request was accepted (HTTP 2xx),
--- false otherwise. In free play there is no match, so the caller handles it.
+-- Onion Loan: the player approves sending `real_onions` to the match pot
+-- (POT_HANDLE) via the real Onion Requests API. Returns true only once that
+-- transfer settles, so the badge credits the in-game loan only on a real,
+-- user-approved payment. The 80/20 winner/tax split is a server-side payout
+-- (escrow), not done here. In free play there is no match, so the caller handles it.
 function request_loan(real_onions)
   local match = active_match()
   if not match then return false end
-  if not (onion.http_post and onion.onion_id) then return false end
-  local wallet = onion.wallet and onion.wallet() or ""
-  local body = string.format(
-    '{"match":"%s","onionId":%s,"wallet":"%s","onions":%d,"taxHandle":"%s"}',
-    match, tostring(onion.onion_id()), wallet, math.floor(real_onions), TAX_HANDLE)
-  local ok, resp = pcall(function()
-    return onion.http_post("https://oniondao.dev/api/games/onionwars/loan", body,
-      { content_type = "application/json", timeout_ms = 15000 })
-  end)
-  if ok and type(resp) == "table" and resp.status and resp.status >= 200 and resp.status < 300 then
-    return true
-  end
-  return false
+  local ext = "loan_" .. match .. "_"
+    .. (onion.onion_id and onion.onion_id() or 0) .. "_"
+    .. (onion.millis and onion.millis() or 0)
+  return onion_transfer(POT_HANDLE, real_onions, "OnionWars loan", ext)
 end
 
 -------------------------------------------------------------------------------
