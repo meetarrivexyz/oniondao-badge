@@ -321,8 +321,10 @@ end
 -- whole-dollar form for tight lines, "$1,234" / "-$1,234"
 local function usd0(cents)
   cents = math.floor(cents + 0.5)
-  local neg = cents < 0
   local dollars = math.floor(math.abs(cents) / 100 + 0.5)
+  -- Only show a minus if there's actually a non-zero magnitude: a value that
+  -- rounds to zero must read "$0", never "-$0".
+  local neg = cents < 0 and dollars > 0
   return (neg and "-$" or "$") .. commas(dollars)
 end
 
@@ -330,7 +332,7 @@ end
 -- $10k, then "$46K" / "$1.5M" so big balances still fit one line.
 local function usd_abbr(cents)
   local d = math.floor(math.abs(cents) / 100 + 0.5)
-  local sign = (cents < 0) and "-$" or "$"
+  local sign = (cents < 0 and d > 0) and "-$" or "$"
   if d >= 1000000 then
     return sign .. string.format("%.1f", d / 1000000) .. "M"
   elseif d >= 10000 then
@@ -339,14 +341,19 @@ local function usd_abbr(cents)
   return sign .. commas(d)
 end
 
--- milli-SOL -> "5.00 SOL"
+-- milli-SOL -> "5.00 SOL". A value that rounds to zero reads "0.00", never
+-- "-0.00" (string.format would otherwise keep the sign bit on tiny negatives).
 local function sol_str(msol)
-  return string.format("%.2f", msol / 1000) .. " SOL"
+  local v = msol / 1000
+  if v < 0 and v > -0.005 then v = 0 end
+  return string.format("%.2f", v) .. " SOL"
 end
 
 -- milli-SOL -> bare "5.00" (for tight list rows where the title already says SOL)
 local function sol_num(msol)
-  return string.format("%.2f", msol / 1000)
+  local v = msol / 1000
+  if v < 0 and v > -0.005 then v = 0 end
+  return string.format("%.2f", v)
 end
 
 -- milli-SOL -> whole-SOL form for tight lines, "1,234 SOL"
@@ -373,10 +380,15 @@ local function screen(lines, opts)
   local font = opts.font or "small"
   local out = lines
   if S and S.sol and not opts.no_header then
-    local sol = S.sol / 1000
+    -- The persistent top line is the spendable WALLET, never net worth, so it
+    -- is always >= 0 (you can't spend, lose, or be skimmed below zero). Net
+    -- worth -- which can go negative when the loan outgrows your assets -- lives
+    -- only on the Wallet screen, never up here.
+    local wallet = math.max(0, S.sol)
+    local sol = wallet / 1000
     local sol_part = (sol < 100) and string.format("%.2f", sol)
       or commas(math.floor(sol + 0.5))
-    out = { sol_part .. " SOL | " .. usd_abbr(msol_to_usd(S.sol)) .. " USD" }
+    out = { sol_part .. " SOL | " .. usd_abbr(msol_to_usd(wallet)) .. " USD" }
     for _, l in ipairs(lines) do out[#out + 1] = l end
   end
   if onion.display_begin then
@@ -886,7 +898,8 @@ local function do_buy()
       return
     end
     if #available == 0 then
-      notify({ "Can't afford anything", "on sale here today.", "Sell, or find cheaper." })
+      notify({ "Can't afford anything", "on sale here today.",
+        "Wallet " .. sol_str(S.sol), "Sell, or find cheaper." })
       return
     end
     if cursor > #available then cursor = #available end
@@ -1024,12 +1037,18 @@ local function do_coinbase()
       local a = actions[cursor]
       if a == "Pay loan" then
         -- Pay in whole dollars, capped by what you owe and what your SOL covers.
+        -- The amount owed is rounded UP to the next dollar so paying the max
+        -- clears the loan to the cent -- otherwise daily interest (floor of
+        -- debt*1.1) leaves an odd sub-dollar remainder that whole-dollar
+        -- payments could never reach, and it would compound forever.
         local wallet_usd = msol_to_usd(S.sol)
-        local max_pay = math.floor(math.min(S.debt, wallet_usd) / 100)  -- whole $
+        local owe_dollars = math.floor((S.debt + 99) / 100)  -- ceil(debt/100)
+        local afford = math.floor(wallet_usd / 100)
+        local max_pay = math.min(owe_dollars, afford)
         local dollars = pick_quantity("Pay loan", 1, max_pay,
           { step = 10, bigstep = 100, start = max_pay })
         if dollars > 0 then
-          local cents = dollars * 100
+          local cents = math.min(dollars * 100, S.debt)  -- never overpay the loan
           local pay = usd_to_msol(cents)
           if pay > S.sol then pay = S.sol end
           S.sol = S.sol - pay
@@ -1121,8 +1140,12 @@ local function main_menu()
     local actions = { "Buy", "Sell", "Travel" }
     if in_loop then actions[#actions + 1] = "Coinbase" end
     if in_store then actions[#actions + 1] = "Store" end
-    actions[#actions + 1] = "Stash"
-    actions[#actions + 1] = "Help"  -- guidance; CANCEL quits (and saves)
+    actions[#actions + 1] = "Wallet"  -- net worth + holdings (the only net-worth screen)
+    -- Help fits everywhere except the two screens that add a Coinbase/Store
+    -- action (the panel holds ~9 lines total). Quit is always available and
+    -- always saves -- so does CANCEL, which is the shortcut for the same thing.
+    if not (in_loop or in_store) then actions[#actions + 1] = "Help" end
+    actions[#actions + 1] = "Quit"
     if cursor > #actions then cursor = #actions end
 
     -- Header shows the wallet (N SOL | $N USD). Below it, a context bar with the
@@ -1147,15 +1170,20 @@ local function main_menu()
       elseif a == "Sell" then do_sell()
       elseif a == "Coinbase" then do_coinbase()
       elseif a == "Store" then do_store()
-      elseif a == "Stash" then
-        local nw = net_worth()  -- milli-SOL
+      elseif a == "Wallet" then
+        -- Lead with the SPENDABLE wallet (S.sol) -- the number you just sold
+        -- into, and what Buy actually spends. Net worth (wallet + onions minus
+        -- the margin loan) sits below: it can be ~0 or negative while your
+        -- wallet is fat, because the Coinbase loan is subtracted from it. The
+        -- "Owe" line right under it explains the gap.
+        local nw = net_worth()  -- milli-SOL; can be negative (loan > assets)
         local pct = math.floor(nw / GOAL_NET * 100)
         if pct < 0 then pct = 0 end
         local rows = {
-          "NET WORTH " .. sol0(nw),
-          "= " .. usd0(msol_to_usd(nw)) .. "  (" .. pct .. "%)",
-          rank_title(nw),
-          "1 SOL = " .. usd(S.sol_price),
+          "WALLET " .. sol_str(S.sol),
+          "Net worth " .. sol0(nw),
+          "Owe " .. usd0(S.debt),
+          rank_title(nw) .. " (" .. pct .. "%)",
         }
         local n0 = #rows
         for i, d in ipairs(DRUGS) do
@@ -1169,6 +1197,13 @@ local function main_menu()
         save_game()
       elseif a == "Help" then
         onboarding()
+      elseif a == "Quit" then
+        -- Save and exit WITHOUT ending the run: the save is kept (only
+        -- game_over clears it), so the next launch resumes exactly here.
+        save_game()
+        notify({ "Game saved.", "Your run is kept --",
+          "pick up here next time." })
+        return "quit"
       end
     end
     save_game()
