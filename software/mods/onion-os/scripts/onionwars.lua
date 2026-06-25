@@ -331,6 +331,11 @@ local function sol_str(msol)
   return string.format("%.2f", msol / 1000) .. " SOL"
 end
 
+-- milli-SOL -> bare "5.00" (for tight list rows where the title already says SOL)
+local function sol_num(msol)
+  return string.format("%.2f", msol / 1000)
+end
+
 -- milli-SOL -> whole-SOL form for tight lines, "1,234 SOL"
 local function sol0(msol)
   return commas(math.floor(msol / 1000 + 0.5)) .. " SOL"
@@ -344,8 +349,9 @@ local TOP_Y    = 16    -- baseline of the first line
 local MAX_CHARS = 22   -- safe characters per line at x=6
 
 -- Draw a full screen in one batched e-paper refresh. Unless opts.no_header is
--- set, a persistent SOL wallet line (with USD value) is drawn at the top of
--- every screen so the player always sees their spendable Solana.
+-- set, a persistent header is drawn at the top of every screen: your spendable
+-- SOL wallet plus the day's exchange rate (1 SOL = $X), so prices shown in SOL
+-- always have their dollar context right there.
 local function screen(lines, opts)
   opts = opts or {}
   local x  = opts.x or 6
@@ -354,7 +360,7 @@ local function screen(lines, opts)
   local font = opts.font or "small"
   local out = lines
   if S and S.sol and not opts.no_header then
-    out = { sol_str(S.sol) .. "  " .. usd0(msol_to_usd(S.sol)) }
+    out = { sol_str(S.sol) .. "  1SOL=" .. usd0(S.sol_price) }
     for _, l in ipairs(lines) do out[#out + 1] = l end
   end
   if onion.display_begin then
@@ -626,8 +632,8 @@ local function travel_events()
       screen({
         "BIG BUYER!",
         "Wants all your " .. DRUGS[i].name,
-        qty .. " @ " .. usd0(price),
-        "Total " .. usd0(total) .. " = " .. sol_str(pay),
+        qty .. " @ " .. sol_str(usd_to_msol(price)),
+        "Total " .. sol_str(pay) .. " (" .. usd0(total) .. ")",
         "SELECT sell  CANCEL keep",
       }, { font = "bold" })
       local btn
@@ -741,7 +747,7 @@ local function travel_events()
       screen({
         "Lobbyist: a lawyer",
         "vs Pritzker raids.",
-        "Price " .. usd0(price) .. " = " .. sol_str(pay),
+        "Price " .. sol_str(pay) .. " (" .. usd0(price) .. ")",
         "",
         "SELECT buy  CANCEL pass",
       }, { font = "bold" })
@@ -764,7 +770,7 @@ local function travel_events()
       screen({
         "Supplier: bigger cart",
         "+40 crates capacity.",
-        "Price " .. usd0(price) .. " = " .. sol_str(pay),
+        "Price " .. sol_str(pay) .. " (" .. usd0(price) .. ")",
         "",
         "SELECT buy  CANCEL skip",
       }, { font = "bold" })
@@ -799,9 +805,9 @@ local function pick_quantity(title, unit_price, max_units, opts)
   while true do
     local lines = { title }
     if unit_price ~= 1 then
-      lines[#lines + 1] = "Unit " .. usd0(unit_price)
+      lines[#lines + 1] = "Unit " .. sol_str(usd_to_msol(unit_price))
       lines[#lines + 1] = "Qty " .. qty .. " (max " .. max_units .. ")"
-      lines[#lines + 1] = "Cost " .. usd0(qty * unit_price)
+      lines[#lines + 1] = "Cost " .. sol_str(usd_to_msol(qty * unit_price))
     else
       lines[#lines + 1] = "Amount $" .. commas(qty)
       lines[#lines + 1] = "(max $" .. commas(max_units) .. ")"
@@ -855,7 +861,7 @@ local function do_buy()
         on_sale = on_sale + 1
         if p <= wallet_usd then
           available[#available + 1] = i
-          rows[#rows + 1] = d.name .. " " .. usd0(p)
+          rows[#rows + 1] = d.name .. " " .. sol_num(usd_to_msol(p))
         end
       end
     end
@@ -869,7 +875,7 @@ local function do_buy()
     end
     if cursor > #available then cursor = #available end
 
-    list_screen("BUY  free " .. space_left(),
+    list_screen("BUY (SOL) free " .. space_left(),
       rows, cursor, "SELECT buy  CANCEL back")
     local btn = wait_button(prev)
     if btn == "up" then cursor = cursor - 1; if cursor < 1 then cursor = #available end
@@ -903,7 +909,7 @@ local function do_sell()
       if S.inv[i] > 0 then
         holdings[#holdings + 1] = i
         local p = S.market[i] or 0
-        local pl = p > 0 and usd0(p) or "--"
+        local pl = p > 0 and sol_num(usd_to_msol(p)) or "--"
         rows[#rows + 1] = d.name .. " " .. pl
       end
     end
@@ -913,7 +919,7 @@ local function do_sell()
     end
     if cursor > #holdings then cursor = #holdings end
 
-    list_screen("SELL", rows, cursor, "SELECT sell CANCEL back")
+    list_screen("SELL (SOL)", rows, cursor, "SELECT sell CANCEL back")
     local btn = wait_button(prev)
     if btn == "up" then cursor = cursor - 1; if cursor < 1 then cursor = #holdings end
     elseif btn == "down" then cursor = cursor + 1; if cursor > #holdings then cursor = 1 end
@@ -950,7 +956,7 @@ local function do_store()
       "LINCOLN PARK STORE",
       "Cart +" .. CART_UPGRADE .. " crates",
       "Capacity now " .. S.coat .. " crates",
-      "Price " .. usd0(price) .. " = " .. sol_str(pay),
+      "Price " .. sol_str(pay) .. " (" .. usd0(price) .. ")",
       "",
       "SELECT buy  CANCEL back",
     }, { font = "small" })
@@ -984,8 +990,8 @@ local function do_coinbase()
   while true do
     local lines = {
       "COINBASE (OnionDAO HQ)",
-      "Brian A.  Owe " .. usd0(S.debt),
-      "1 SOL = " .. usd(S.sol_price),
+      "Broker Brian Armstrong",
+      "Owe " .. usd0(S.debt) .. " (margin)",
     }
     for i, a in ipairs(actions) do
       lines[#lines + 1] = ((i == cursor) and "> " or "  ") .. a
