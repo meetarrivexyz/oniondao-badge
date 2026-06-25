@@ -2,7 +2,7 @@
   "scripts": [
     {
       "name": "onionwars.lua",
-      "url": "https://cdn.jsdelivr.net/gh/meetarrivexyz/oniondao-badge@9c66d6ea646ef6bae8bd89022e79b16f4926b081/software/mods/onion-os/scripts/onionwars.lua",
+      "url": "https://cdn.jsdelivr.net/gh/meetarrivexyz/oniondao-badge@6c5752d2331bbb7fdf884b1141f365be69076047/software/mods/onion-os/scripts/onionwars.lua",
       "autorun": false
     }
   ]
