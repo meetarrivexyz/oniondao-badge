@@ -29,12 +29,12 @@
 -------------------------------------------------------------------------------
 
 local TOTAL_DAYS   = 30   -- the 2025 trading year, 30 days / 30 moves
-local START_SOL    = 5000     -- starting wallet in milli-SOL (5.00 SOL)
-local START_DEBT   = 150000   -- starting Coinbase margin loan in USD cents ($1,500)
+local START_SOL    = 10000    -- starting wallet in milli-SOL (10.00 SOL ~ $1,900)
+local START_DEBT   = 550000   -- starting Coinbase margin loan in USD cents ($5,500)
 local START_HP     = 30
-local START_COAT   = 100      -- carrying capacity, in pounds of onions
-local DEBT_RATE    = 0.08     -- Coinbase margin "juice": 8%/day, compounds daily
-local GOAL_NET     = 2500000  -- the "retire" target in USD cents: $25,000 = Onion Kingpin
+local START_COAT   = 100      -- carrying capacity, in crates of onions
+local DEBT_RATE    = 0.10     -- Coinbase margin "juice": 10%/day, compounds daily
+local GOAL_NET     = 5000000  -- the "retire" target in milli-SOL: 5,000 SOL = Onion Kingpin
 local SCREEN_W      = 264
 local SCREEN_H      = 176
 
@@ -43,7 +43,7 @@ local SCREEN_H      = 176
 -- a grace window at the start, gentler raid odds, and smaller, rarer shakedowns.
 local GRACE_DAYS    = 3    -- first N days have no raids or shakedowns
 local RAID_BASE     = 6    -- base Pritzker-raid % while carrying onions
-local RAID_PER_UNIT = 20   -- +1% raid risk per this many pounds carried
+local RAID_PER_UNIT = 20   -- +1% raid risk per this many crates carried
 local RAID_CAP      = 25   -- max raid %
 local POLICY_CHANCE = 10   -- % chance of a policy/tax skim on a travel
 local POLICY_MIN    = 6    -- a policy skim takes POLICY_MIN..POLICY_MAX % of your SOL
@@ -75,9 +75,9 @@ local API_BASE   = "https://oniondao.dev"
 -- real money sink. (The cheap random "supplier" cart event still happens on the
 -- road; this is the reliable but expensive option.)
 local CART_CITY      = "Lincoln Park"
-local CART_UPGRADE   = 10     -- pounds added per store upgrade
-local CART_BASE_COST = 40000  -- price of your first store upgrade in USD cents ($400)...
-local CART_COST_STEP = 20000  -- ...rising by $200 for each one already bought
+local CART_UPGRADE   = 10     -- crates added per store upgrade
+local CART_BASE_COST = 800000 -- price of your first store upgrade in USD cents ($8,000)...
+local CART_COST_STEP = 400000 -- ...rising by $4,000 for each one already bought
 
 -- Solana price model. S.sol_price is the USD-per-SOL price in CENTS. It tracks
 -- Solana's real 2025 arc through these keyframes (day -> cents), linearly
@@ -95,19 +95,20 @@ local SOL_KEYS = {
   { 30, 12492 },  -- Dec close   $124.92
 }
 
--- The onions you trade, in 2025 retail terms (USD/lb), cheapest -> priciest.
--- name, base $/lb (cents), low price (cents), high price (cents). The table
--- order maps to saved inventory slots, so keep it stable across updates.
--- (Internally the list is still iterated as the goods list.)
+-- The onions you trade, cheapest -> priciest. Prices are in USD CENTS, mapped
+-- onto the classic Drug Wars price bands (Ludes -> Cocaine) so the dollar
+-- magnitudes match the original game; you pay for them in SOL at the day's rate.
+-- name, base $ (cents, for net-worth valuation), low price (cents), high (cents).
+-- The table order maps to saved inventory slots, so keep it stable across updates.
 local DRUGS = {
-  { name = "Green Onions", base = 99,  low = 60,  high = 160 },
-  { name = "Yellow Onion", base = 150, low = 90,  high = 240 },
-  { name = "White Onion",  base = 160, low = 100, high = 260 },
-  { name = "Red Onion",    base = 180, low = 110, high = 290 },
-  { name = "Sweet Onion",  base = 200, low = 120, high = 320 },
-  { name = "Vidalia",      base = 250, low = 150, high = 400 },  -- Vidalia/Walla Walla
-  { name = "Cipollini",    base = 350, low = 200, high = 600 },  -- seasonal
-  { name = "Shallots",     base = 500, low = 300, high = 850 },  -- priciest
+  { name = "Green Onions", base = 3550,    low = 1100,    high = 6000    },  -- Ludes
+  { name = "Yellow Onion", base = 17000,   low = 9000,    high = 25000   },  -- Speed
+  { name = "White Onion",  base = 46000,   low = 22000,   high = 70000   },  -- Peyote
+  { name = "Red Onion",    base = 89500,   low = 54000,   high = 125000  },  -- Opium
+  { name = "Sweet Onion",  base = 96500,   low = 63000,   high = 130000  },  -- Shrooms
+  { name = "Vidalia",      base = 275000,  low = 100000,  high = 450000  },  -- Acid
+  { name = "Cipollini",    base = 925000,  low = 550000,  high = 1300000 },  -- Heroin
+  { name = "Shallots",     base = 2200000, low = 1500000, high = 2900000 },  -- Cocaine
 }
 
 local CITIES = {
@@ -147,19 +148,19 @@ local function fresh_state()
     sol      = START_SOL,         -- wallet, in milli-SOL
     debt     = START_DEBT,        -- Coinbase margin loan, in USD cents
     hp       = START_HP,
-    coat     = START_COAT,        -- carrying capacity, in pounds
+    coat     = START_COAT,        -- carrying capacity, in crates
     gun      = 0,                 -- number of lawyers on retainer
-    inv      = inv,               -- pounds held per onion index
+    inv      = inv,               -- crates held per onion index
     market   = {},                -- USD-cents price per onion for current city (0 = unavailable)
     sol_price = SOL_OPEN,         -- current USD-per-SOL price, in cents
     cart_lvl = 0,                 -- store cart upgrades bought (sets next price)
     over     = false,
-    peak     = 0,                 -- best net worth (USD cents) seen this run (runtime only)
+    peak     = 0,                 -- best net worth (milli-SOL) seen this run (runtime only)
     tip      = nil,               -- pending hot-tip { good, city } (runtime only)
   }
 end
 
--- pounds currently carried
+-- crates currently carried
 local function carried()
   local n = 0
   for i = 1, #DRUGS do n = n + S.inv[i] end
@@ -184,28 +185,29 @@ local function msol_to_usd(msol)
   return math.floor(msol * S.sol_price / 1000 + 0.5)
 end
 
--- USD value (cents) of the onions you're holding, at base retail price so the
--- figure is stable even where a good isn't on sale today.
+-- USD value (cents) of the onions you're holding, at base price so the figure
+-- is stable even where a good isn't on sale today.
 local function stash_value()
   local v = 0
   for i = 1, #DRUGS do v = v + S.inv[i] * DRUGS[i].base end
   return v
 end
 
--- Net worth in USD cents: SOL wallet + held onions - margin loan.
+-- Net worth in milli-SOL: everything converted to Solana at the day's rate --
+-- SOL wallet + held onions (USD->SOL) - the margin loan (USD->SOL).
 local function net_worth()
-  return msol_to_usd(S.sol) + stash_value() - S.debt
+  return S.sol + usd_to_msol(stash_value()) - usd_to_msol(S.debt)
 end
 
--- Rank ladder by net worth (USD cents) -- a title to chase. Rises to GOAL_NET.
+-- Rank ladder by net worth (milli-SOL) -- a title to chase. Rises to GOAL_NET.
 local TITLES = {
   { -1,      "Broke" },           -- in the red (debt > assets)
   { 0,       "Onion Peddler" },
-  { 300000,  "Onion Hustler" },   -- $3,000
-  { 800000,  "Onion Dealer" },    -- $8,000
-  { 1500000, "Onion Boss" },      -- $15,000
-  { 2000000, "Onion Baron" },     -- $20,000
-  { GOAL_NET, "Onion Kingpin" },  -- $25,000
+  { 100000,  "Onion Hustler" },   -- 100 SOL
+  { 500000,  "Onion Dealer" },    -- 500 SOL
+  { 1500000, "Onion Boss" },      -- 1,500 SOL
+  { 3000000, "Onion Baron" },     -- 3,000 SOL
+  { GOAL_NET, "Onion Kingpin" },  -- 5,000 SOL
 }
 local function rank_title(nw)
   local t = TITLES[1][2]
@@ -316,14 +318,22 @@ local function usd(cents)
   return (neg and "-$" or "$") .. commas(dollars) .. string.format(".%02d", cents % 100)
 end
 
--- whole-dollar form for tight lines, "$1,234"
+-- whole-dollar form for tight lines, "$1,234" / "-$1,234"
 local function usd0(cents)
-  return "$" .. commas(math.floor((cents + 50) / 100))
+  cents = math.floor(cents + 0.5)
+  local neg = cents < 0
+  local dollars = math.floor(math.abs(cents) / 100 + 0.5)
+  return (neg and "-$" or "$") .. commas(dollars)
 end
 
 -- milli-SOL -> "5.00 SOL"
 local function sol_str(msol)
   return string.format("%.2f", msol / 1000) .. " SOL"
+end
+
+-- milli-SOL -> whole-SOL form for tight lines, "1,234 SOL"
+local function sol0(msol)
+  return commas(math.floor(msol / 1000 + 0.5)) .. " SOL"
 end
 
 -- Layout constants for the 264x176 e-paper panel using FreeMono9pt fonts.
@@ -596,7 +606,7 @@ local function travel_events()
       "Raided a dumpster!",
       "Abandoned farm stand!",
     }
-    notify({ finds[rnd(1, #finds)], "Grabbed " .. amt .. " lb " .. DRUGS[i].name })
+    notify({ finds[rnd(1, #finds)], "Grabbed " .. amt .. " " .. DRUGS[i].name })
     return
   end
 
@@ -616,8 +626,8 @@ local function travel_events()
       screen({
         "BIG BUYER!",
         "Wants all your " .. DRUGS[i].name,
-        qty .. " lb @ " .. usd(price),
-        "Total " .. usd(total) .. " = " .. sol_str(pay),
+        qty .. " @ " .. usd0(price),
+        "Total " .. usd0(total) .. " = " .. sol_str(pay),
         "SELECT sell  CANCEL keep",
       }, { font = "bold" })
       local btn
@@ -633,7 +643,7 @@ local function travel_events()
 
   -- Small windfall: a little SOL luck to keep momentum up.
   if chance(8) then
-    local gain = rnd(50, 400)  -- milli-SOL
+    local gain = rnd(100, 1500)  -- milli-SOL (0.1 - 1.5 SOL)
     S.sol = S.sol + gain
     local wins = {
       { "Found a dropped Ledger!", "+" .. sol_str(gain) },
@@ -674,7 +684,7 @@ local function travel_events()
       notify({
         "FBI raids your stash!",
         "Feds confiscate your onions.",
-        "Seized " .. seized .. " lb",
+        "Seized " .. seized .. " crates",
         "(" .. pct .. "%)",
       })
       return
@@ -731,7 +741,7 @@ local function travel_events()
       screen({
         "Lobbyist: a lawyer",
         "vs Pritzker raids.",
-        "Price " .. usd(price) .. " = " .. sol_str(pay),
+        "Price " .. usd0(price) .. " = " .. sol_str(pay),
         "",
         "SELECT buy  CANCEL pass",
       }, { font = "bold" })
@@ -753,8 +763,8 @@ local function travel_events()
       local prev = onion.buttons()
       screen({
         "Supplier: bigger cart",
-        "+40 lb capacity.",
-        "Price " .. usd(price) .. " = " .. sol_str(pay),
+        "+40 crates capacity.",
+        "Price " .. usd0(price) .. " = " .. sol_str(pay),
         "",
         "SELECT buy  CANCEL skip",
       }, { font = "bold" })
@@ -763,7 +773,7 @@ local function travel_events()
       if btn == "select" then
         S.sol = S.sol - pay
         S.coat = S.coat + 40
-        notify({ "Bigger cart!", "Capacity: " .. S.coat .. " lb" })
+        notify({ "Bigger cart!", "Capacity: " .. S.coat .. " crates" })
       end
     end
   end
@@ -789,9 +799,9 @@ local function pick_quantity(title, unit_price, max_units, opts)
   while true do
     local lines = { title }
     if unit_price ~= 1 then
-      lines[#lines + 1] = "Unit " .. usd(unit_price) .. "/lb"
-      lines[#lines + 1] = "Qty " .. qty .. " lb (max " .. max_units .. ")"
-      lines[#lines + 1] = "Cost " .. usd(qty * unit_price)
+      lines[#lines + 1] = "Unit " .. usd0(unit_price)
+      lines[#lines + 1] = "Qty " .. qty .. " (max " .. max_units .. ")"
+      lines[#lines + 1] = "Cost " .. usd0(qty * unit_price)
     else
       lines[#lines + 1] = "Amount $" .. commas(qty)
       lines[#lines + 1] = "(max $" .. commas(max_units) .. ")"
@@ -845,7 +855,7 @@ local function do_buy()
         on_sale = on_sale + 1
         if p <= wallet_usd then
           available[#available + 1] = i
-          rows[#rows + 1] = d.name .. " " .. usd(p)
+          rows[#rows + 1] = d.name .. " " .. usd0(p)
         end
       end
     end
@@ -859,7 +869,7 @@ local function do_buy()
     end
     if cursor > #available then cursor = #available end
 
-    list_screen("BUY  free " .. space_left() .. " lb",
+    list_screen("BUY  free " .. space_left(),
       rows, cursor, "SELECT buy  CANCEL back")
     local btn = wait_button(prev)
     if btn == "up" then cursor = cursor - 1; if cursor < 1 then cursor = #available end
@@ -876,8 +886,8 @@ local function do_buy()
         if cost > S.sol then cost = S.sol end
         S.sol = S.sol - cost
         S.inv[i] = S.inv[i] + qty
-        notify({ "Bought " .. qty .. " lb " .. DRUGS[i].name,
-          "for " .. sol_str(cost), "(" .. usd(qty * price) .. ")" })
+        notify({ "Bought " .. qty .. " " .. DRUGS[i].name,
+          "for " .. sol_str(cost), "(" .. usd0(qty * price) .. ")" })
       end
     end
   end
@@ -893,7 +903,7 @@ local function do_sell()
       if S.inv[i] > 0 then
         holdings[#holdings + 1] = i
         local p = S.market[i] or 0
-        local pl = p > 0 and usd(p) or "--"
+        local pl = p > 0 and usd0(p) or "--"
         rows[#rows + 1] = d.name .. " " .. pl
       end
     end
@@ -919,8 +929,8 @@ local function do_sell()
           local gain = usd_to_msol(qty * price)
           S.sol = S.sol + gain
           S.inv[i] = S.inv[i] - qty
-          notify({ "Sold " .. qty .. " lb " .. DRUGS[i].name,
-            "for " .. sol_str(gain), "(" .. usd(qty * price) .. ")" })
+          notify({ "Sold " .. qty .. " " .. DRUGS[i].name,
+            "for " .. sol_str(gain), "(" .. usd0(qty * price) .. ")" })
         end
       end
     end
@@ -938,9 +948,9 @@ local function do_store()
     local pay = usd_to_msol(price)
     screen({
       "LINCOLN PARK STORE",
-      "Cart +" .. CART_UPGRADE .. " lb",
-      "Capacity now " .. S.coat .. " lb",
-      "Price " .. usd(price) .. " = " .. sol_str(pay),
+      "Cart +" .. CART_UPGRADE .. " crates",
+      "Capacity now " .. S.coat .. " crates",
+      "Price " .. usd0(price) .. " = " .. sol_str(pay),
       "",
       "SELECT buy  CANCEL back",
     }, { font = "small" })
@@ -954,8 +964,8 @@ local function do_store()
         S.sol = S.sol - pay
         S.coat = S.coat + CART_UPGRADE
         S.cart_lvl = S.cart_lvl + 1
-        notify({ "Bigger cart!", "Capacity " .. S.coat .. " lb.",
-          "Next +" .. CART_UPGRADE .. " lb costs more." })
+        notify({ "Bigger cart!", "Capacity " .. S.coat .. " crates.",
+          "Next +" .. CART_UPGRADE .. " costs more." })
       end
     end
   end
@@ -973,9 +983,9 @@ local function do_coinbase()
   local prev = onion.buttons()
   while true do
     local lines = {
-      "COINBASE - OnionDAO HQ",
-      "Broker: Brian Armstrong",
-      "Owe " .. usd(S.debt),
+      "COINBASE (OnionDAO HQ)",
+      "Brian A.  Owe " .. usd0(S.debt),
+      "1 SOL = " .. usd(S.sol_price),
     }
     for i, a in ipairs(actions) do
       lines[#lines + 1] = ((i == cursor) and "> " or "  ") .. a
@@ -1001,8 +1011,8 @@ local function do_coinbase()
           if pay > S.sol then pay = S.sol end
           S.sol = S.sol - pay
           S.debt = S.debt - cents
-          notify({ "Paid " .. usd(cents) .. " on loan", "(" .. sol_str(pay) .. ")",
-            "Owe " .. usd(S.debt) })
+          notify({ "Paid " .. usd0(cents) .. " on loan", "(" .. sol_str(pay) .. ")",
+            "Owe " .. usd0(S.debt) })
         end
       elseif a == "Borrow" then
         local dollars = pick_quantity("Borrow (max $5000)", 1, 5000,
@@ -1012,16 +1022,16 @@ local function do_coinbase()
           local draw = usd_to_msol(cents)
           S.sol = S.sol + draw
           S.debt = S.debt + cents
-          notify({ "Borrowed " .. usd(cents), "(+" .. sol_str(draw) .. ")",
-            "Owe " .. usd(S.debt) })
+          notify({ "Borrowed " .. usd0(cents), "(+" .. sol_str(draw) .. ")",
+            "Owe " .. usd0(S.debt) })
         end
       elseif a == "SOL price" then
         notify({
           "SOLANA price today",
-          usd(S.sol_price) .. " / SOL",
+          "1 SOL = " .. usd(S.sol_price),
           "Day " .. S.day .. "/" .. TOTAL_DAYS .. " of 2025",
           "Your " .. sol_str(S.sol),
-          "= " .. usd(msol_to_usd(S.sol)),
+          "= " .. usd0(msol_to_usd(S.sol)),
         }, { no_header = true })
       end
     end
@@ -1114,18 +1124,18 @@ local function main_menu()
       elseif a == "Coinbase" then do_coinbase()
       elseif a == "Store" then do_store()
       elseif a == "Stash" then
-        local nw = net_worth()
+        local nw = net_worth()  -- milli-SOL
         local pct = math.floor(nw / GOAL_NET * 100)
         if pct < 0 then pct = 0 end
         local rows = {
-          "NET WORTH " .. usd(nw),
-          "= " .. sol_str(usd_to_msol(nw)) .. " (" .. pct .. "% to goal)",
+          "NET WORTH " .. sol0(nw),
+          "= " .. usd0(msol_to_usd(nw)) .. "  (" .. pct .. "%)",
           rank_title(nw),
-          "",
+          "1 SOL = " .. usd(S.sol_price),
         }
         local n0 = #rows
         for i, d in ipairs(DRUGS) do
-          if S.inv[i] > 0 then rows[#rows + 1] = d.name .. " x" .. S.inv[i] .. " lb" end
+          if S.inv[i] > 0 then rows[#rows + 1] = d.name .. " x" .. S.inv[i] end
         end
         if #rows == n0 then rows[#rows + 1] = "(cart is empty)" end
         notify(rows, { no_header = true })
@@ -1148,7 +1158,7 @@ end
 
 local function game_over()
   S.over = true
-  local final = net_worth()  -- USD cents
+  local final = net_worth()  -- milli-SOL
   local why
   if S.hp <= 0 then why = "Held indefinitely."
   else why = "Out of time. Game over." end
@@ -1164,14 +1174,14 @@ local function game_over()
   local lines = {
     "END OF 2025",
     why,
-    "Net worth: " .. usd(final),
-    "= " .. sol_str(usd_to_msol(final)),
+    "Net worth: " .. sol0(final),
+    "= " .. usd0(msol_to_usd(final)),
     "Rank: " .. rank_title(final),
-    "Peak: " .. usd(S.peak),
+    "Peak: " .. sol0(S.peak),
   }
   if final >= GOAL_NET then lines[#lines + 1] = "ONION KINGPIN -- you win!" end
   if is_best then lines[#lines + 1] = "NEW BEST!"
-  elseif best then lines[#lines + 1] = "Best: " .. usd(best) end
+  elseif best then lines[#lines + 1] = "Best: " .. sol0(best) end
 
   notify(lines, { no_header = true })
 end
@@ -1276,10 +1286,10 @@ local function intro_if_new(is_resume)
     notify({
       "ONIONWARS - 2025",
       "Trade onions in SOL.",
-      "Goal: " .. usd0(GOAL_NET) .. " net",
+      "Goal: " .. sol0(GOAL_NET) .. " net",
       "worth = Onion Kingpin.",
       "Pay Coinbase fast:",
-      "loan grows 8%/day!",
+      "loan grows 10%/day!",
     })
   end
 end
@@ -1327,7 +1337,7 @@ function onboarding()
       "Broker Brian Armstrong",
       "lends at OnionDAO HQ",
       "(The Loop). Loan grows",
-      "8%/day - pay it FAST!",
+      "10%/day - pay it FAST!",
     },
     {
       "WATCH OUT",
@@ -1348,7 +1358,7 @@ function onboarding()
     {
       "GET RICH",
       "",
-      "Goal $25,000 net =",
+      "Goal 5,000 SOL net =",
       "Onion Kingpin.",
       "",
       "SELECT to play!",
