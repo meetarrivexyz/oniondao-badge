@@ -1125,10 +1125,11 @@ local function main_menu()
     actions[#actions + 1] = "Help"  -- guidance; CANCEL quits (and saves)
     if cursor > #actions then cursor = #actions end
 
-    -- Wallet (SOL + USD) is in the header. City + 1 status line + up to 6 actions.
+    -- Header shows the wallet (N SOL | $N USD). Below it, a context bar with the
+    -- day + neighborhood, then the Coinbase loan, then up to 6 actions.
     local lines = {
-      CITIES[S.city],
-      "Day " .. S.day .. "/" .. TOTAL_DAYS .. "  Owe " .. usd0(S.debt),
+      "Day " .. S.day .. "/" .. TOTAL_DAYS .. " " .. CITIES[S.city],
+      "Owe " .. usd0(S.debt) .. " (margin)",
     }
     for i, a in ipairs(actions) do
       lines[#lines + 1] = ((i == cursor) and "> " or "  ") .. a
